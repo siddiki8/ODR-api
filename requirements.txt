@@ -14,7 +14,7 @@ litellm>=1.30.0 # For potential future integration or other services
 
 # HTTP Requests (used by services)
 # requests>=2.28.0 # Removed, assuming httpx is sufficient
-websockets>=10.0 # Keep if needed for FastAPI/uvicorn or other async comms
+websockets>=11.0.3 # Keep if needed for FastAPI/uvicorn or other async comms
 httpx>=0.24.0 # Used for downloading PDFs and potentially by Crawl4AI
 
 # Web Scraping & Related
@@ -25,3 +25,9 @@ langchain-text-splitters
 
 # Reranking
 together
+
+# NiceGUI
+nicegui>=1.4.0
+
+# Markdown
+markdown>=3.5.1

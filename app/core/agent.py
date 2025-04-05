@@ -1,12 +1,12 @@
 from typing import Any, Dict, Optional, Callable, List, Tuple, Literal, Coroutine
-import logging # Import logging
+import logging 
 import json
 import re
 import asyncio
-import os # <-- Import os for file operations
+import os
 from collections import Counter
 from pydantic import ValidationError, HttpUrl
-from datetime import datetime # <-- Import datetime for timestamp
+from datetime import datetime 
 
 # --- Internal Imports (New Structure) ---
 from ..services.search import execute_batch_serper_search, SerperConfig
@@ -1030,7 +1030,6 @@ class DeepResearchAgent:
             await self._send_ws_update(final_status, final_ws_status, final_ws_message, {
                 "final_report_length": len(final_report),
                 "usage": usage_statistics.model_dump(),  # Convert to dict for JSON serialization
-                "final_report": final_report
             })
 
             return {

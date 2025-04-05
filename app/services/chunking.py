@@ -63,6 +63,13 @@ class Chunker:
         This is a simple implementation - more comprehensive HTML cleaning should be 
         done before the text reaches the chunker.
         """
+        if not text:
+            return ""
+            
+        # Log only the length, not the content
+        input_length = len(text)
+        logger.debug(f"Stripping HTML from text of length {input_length} chars")
+        
         # Strip common HTML tags
         import re
         # Remove script, style tags and their content
@@ -82,7 +89,11 @@ class Chunker:
         # Remove excess whitespace
         text = re.sub(r'\s+', ' ', text)
         
-        return text.strip()
+        result = text.strip()
+        output_length = len(result)
+        logger.debug(f"HTML stripped: removed {input_length - output_length} chars ({(input_length - output_length) / max(1, input_length) * 100:.1f}%)")
+        
+        return result
     
     def chunk(self, text: str, recursive: bool = False, depth: int = 0) -> List[str]:
         """
@@ -101,7 +112,12 @@ class Chunker:
             return []
             
         # First, ensure all HTML is stripped
+        original_length = len(text)
         text = self._strip_html(text)
+        stripped_length = len(text)
+        
+        if original_length > stripped_length:
+            logger.debug(f"Stripped HTML: removed {original_length - stripped_length} chars ({(original_length - stripped_length) / max(1, original_length) * 100:.1f}%)")
         
         # If text is smaller than min size, return as is (if not empty)
         if len(text) < self.min_chunk_size:

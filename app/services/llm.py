@@ -112,33 +112,21 @@ async def call_litellm_acompletion(
         return response, usage_info, cost_info
 
     except litellm.exceptions.RateLimitError as e:
-        log.warning(f"LiteLLM Rate Limit Error for model {model_for_log}: {e}")
-        raise LLMRateLimitError(f"LLM service rate limit exceeded for model {model_for_log}. Original error: {e}") from e
-    except (
-        litellm.exceptions.APIConnectionError,
-        litellm.exceptions.Timeout,
-        litellm.exceptions.ServiceUnavailableError,
-        litellm.exceptions.APIError # Catch other general API errors
-    ) as e:
-        log.error(f"LiteLLM Communication Error for model {model_for_log}: {e}", exc_info=True)
-        raise LLMCommunicationError(f"Error communicating with LLM service for model {model_for_log}. Original error: {type(e).__name__}: {e}") from e
-    except litellm.exceptions.AuthenticationError as e:
-         log.error(f"LiteLLM Authentication Error for model {model_for_log}: {e}")
-         raise ConfigurationError(f"LLM authentication failed for model {model_for_log}. Check API key/credentials. Original error: {e}") from e
-    except litellm.exceptions.InvalidRequestError as e:
-         log.error(f"LiteLLM Invalid Request Error for model {model_for_log}: {e}")
-         # This could be a configuration issue (bad params) or potentially malformed messages
-         raise ConfigurationError(f"Invalid request sent to LLM for model {model_for_log}. Check parameters/messages. Original error: {e}") from e
-    # Catch Pydantic validation errors if LiteLLM raises them during response_model parsing
-    except litellm.exceptions.ContentPolicyViolationError as e:
-        log.warning(f"LiteLLM Content Policy Violation for model {model_for_log}: {e}")
-        # This is a specific type of API response, treat as communication error or maybe validation?
-        # Using LLMCommunicationError for now
-        raise LLMCommunicationError(f"LLM blocked the response due to content policy for model {model_for_log}. Original error: {e}") from e
+        error_type = type(e).__name__
+        logger.warning(f"LiteLLM RateLimitError for model {model_for_log}: {error_type}")
+        raise LLMRateLimitError(f"LLM service rate limit exceeded for model {model_for_log}. Original error type: {error_type}") from e
+    except litellm.exceptions.APIConnectionError as e:
+        error_type = type(e).__name__
+        logger.error(f"LiteLLM APIConnectionError for model {model_for_log}: {error_type}")
+        raise LLMCommunicationError(f"Could not connect to LLM service for model {model_for_log}. Original error type: {error_type}") from e
+    except litellm.exceptions.APIError as e:
+        error_type = type(e).__name__
+        logger.error(f"LiteLLM APIError for model {model_for_log}: {error_type}")
+        raise LLMError(f"LLM service returned an API error for model {model_for_log}. Original error type: {error_type}") from e
     except Exception as e:
-        # Catch any other unexpected errors from LiteLLM or elsewhere
-        log.error(f"Unexpected error during LiteLLM call for model {model_for_log}: {e}", exc_info=True)
-        raise LLMError(f"An unexpected error occurred during the LLM call for model {model_for_log}. Original error: {type(e).__name__}: {e}") from e
+        error_type = type(e).__name__
+        logger.error(f"Unexpected error during LiteLLM call for model {model_for_log}: {error_type}", exc_info=False) # Avoid full trace unless debugging needed
+        raise LLMError(f"An unexpected error occurred during the LLM call for model {model_for_log}. Original error type: {error_type}") from e
 
 # Example usage (for testing if needed)
 async def _test():

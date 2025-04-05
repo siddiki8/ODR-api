@@ -10,25 +10,25 @@ pydantic-settings>=2.0.0
 python-dotenv>=1.0.0
 
 # LLM Interaction
-litellm>=1.30.0 # Use a recent version
+litellm>=1.30.0 # For potential future integration or other services
 
 # HTTP Requests (used by services)
-requests>=2.28.0
-websockets>=10.0
+# requests>=2.28.0 # Removed, assuming httpx is sufficient
+websockets>=10.0 # Keep if needed for FastAPI/uvicorn or other async comms
+httpx>=0.24.0 # Used for downloading PDFs and potentially by Crawl4AI
 
 # Web Scraping & Related
-# Check for latest compatible version
-git+https://github.com/salzubi401/crawl4ai.git@main
+crawl4ai[playwright]>=0.4.0 # Use Playwright backend
 wikipedia-api>=0.6.0
-fasttext>=0.9.2
-huggingface-hub>=0.15.0
-beautifulsoup4>=4.11.0 # Often needed for HTML processing/cleaning, even if not explicit
-lxml>=0.0.0 # Added dependency for potential future XML/HTML parsing needs in scraping
-beautifulsoup4>=4.11.0
-httpx>=0.24.0
+# pymupdf4llm>=0.0.15 # Removed
+markitdown[pdf]>=0.1.1 # Use MarkItDown for PDF conversion
+# fasttext>=0.9.2 # Removed (Quality filtering disabled)
+# huggingface-hub>=0.15.0 # Removed (Quality filtering disabled)
+# beautifulsoup4>=4.11.0 # Removed, replaced by crawl4ai markdown/special handlers
+# lxml>=0.0.0 # Removed
 
 # Reranking
-together
+together # Keep if used by other services
 
-#playwright
-torch == 2.5.1
+# Removed unused dependencies
+# torch == 2.5.1

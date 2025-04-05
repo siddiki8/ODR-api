@@ -64,7 +64,8 @@ def api_logger(message: str, level: int = logging.INFO):
 @app.exception_handler(ConfigurationError)
 async def configuration_error_handler(request: Request, exc: ConfigurationError):
     error_id = uuid.uuid4()
-    logger.error(f"Configuration Error (ID: {error_id}): {exc}", exc_info=True)
+    error_type = type(exc).__name__
+    logger.error(f"Configuration Error (ID: {error_id}): {error_type}", exc_info=False) # Log type only
     return JSONResponse(
         status_code=500, # Configuration errors are server-side issues
         content={"detail": f"Server configuration error. Please contact administrator. Error ID: {error_id}"},
@@ -73,17 +74,18 @@ async def configuration_error_handler(request: Request, exc: ConfigurationError)
 @app.exception_handler(ValidationError)
 async def validation_error_handler(request: Request, exc: ValidationError):
     error_id = uuid.uuid4()
-    # Log as warning because it's often client-side input or unexpected LLM output
-    logger.warning(f"Validation Error (ID: {error_id}): {exc}", exc_info=False) # Less verbose logging for validation
+    error_type = type(exc).__name__
+    logger.warning(f"Validation Error (ID: {error_id}): {error_type}", exc_info=False) # Log type only
     return JSONResponse(
         status_code=422, # Unprocessable Entity for validation errors
-        content={"detail": f"Validation Error: {exc}. Error ID: {error_id}"},
+        content={"detail": f"Validation Error: {error_type}. Error ID: {error_id}"},
     )
 
 @app.exception_handler(LLMRateLimitError)
 async def llm_rate_limit_error_handler(request: Request, exc: LLMRateLimitError):
     error_id = uuid.uuid4()
-    logger.warning(f"LLM Rate Limit Error (ID: {error_id}): {exc}", exc_info=False)
+    error_type = type(exc).__name__
+    logger.warning(f"LLM Rate Limit Error (ID: {error_id}): {error_type}", exc_info=False) # Log type only
     return JSONResponse(
         status_code=429, # Too Many Requests
         content={"detail": f"LLM service rate limit exceeded. Please try again later. Error ID: {error_id}"},
@@ -92,7 +94,8 @@ async def llm_rate_limit_error_handler(request: Request, exc: LLMRateLimitError)
 @app.exception_handler(LLMCommunicationError)
 async def llm_communication_error_handler(request: Request, exc: LLMCommunicationError):
     error_id = uuid.uuid4()
-    logger.error(f"LLM Communication Error (ID: {error_id}): {exc}", exc_info=True)
+    error_type = type(exc).__name__
+    logger.error(f"LLM Communication Error (ID: {error_id}): {error_type}", exc_info=False) # Log type only
     return JSONResponse(
         status_code=503, # Service Unavailable
         content={"detail": f"Error communicating with LLM service. Please try again later. Error ID: {error_id}"},
@@ -106,17 +109,18 @@ async def llm_communication_error_handler(request: Request, exc: LLMCommunicatio
 @app.exception_handler(ExternalServiceError)
 async def external_service_error_handler(request: Request, exc: ExternalServiceError):
     error_id = uuid.uuid4()
-    logger.error(f"External Service Error (ID: {error_id}) - Type: {type(exc).__name__}: {exc}", exc_info=True)
-    # Could add more specific handling based on type(exc) if needed (Search, Ranking, Scraping)
+    error_type = type(exc).__name__
+    logger.error(f"External Service Error (ID: {error_id}) - Type: {error_type}: {exc}", exc_info=False) # Log type only
     return JSONResponse(
         status_code=503, # Service Unavailable
-        content={"detail": f"Error communicating with an external service ({type(exc).__name__}). Please try again later. Error ID: {error_id}"},
+        content={"detail": f"Error communicating with an external service ({error_type}). Please try again later. Error ID: {error_id}"},
     )
 
 @app.exception_handler(AgentExecutionError)
 async def agent_error_handler(request: Request, exc: AgentExecutionError):
     error_id = uuid.uuid4()
-    logger.error(f"Agent Execution Error (ID: {error_id}): {exc}", exc_info=True)
+    error_type = type(exc).__name__
+    logger.error(f"Agent Execution Error (ID: {error_id}): {error_type}", exc_info=False) # Log type only
     return JSONResponse(
         status_code=500, # Internal Server Error for agent logic failures
         content={"detail": f"An error occurred during the research process. Error ID: {error_id}"},
@@ -126,7 +130,8 @@ async def agent_error_handler(request: Request, exc: AgentExecutionError):
 @app.exception_handler(DeepResearchError)
 async def deep_research_error_handler(request: Request, exc: DeepResearchError):
     error_id = uuid.uuid4()
-    logger.error(f"Unhandled Deep Research Error (ID: {error_id}) - Type: {type(exc).__name__}: {exc}", exc_info=True)
+    error_type = type(exc).__name__
+    logger.error(f"Unhandled Deep Research Error (ID: {error_id}) - Type: {error_type}", exc_info=False) # Log type only
     return JSONResponse(
         status_code=500,
         content={"detail": f"An unexpected error occurred. Error ID: {error_id}"},
@@ -136,8 +141,9 @@ async def deep_research_error_handler(request: Request, exc: DeepResearchError):
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
     error_id = uuid.uuid4()
-    logger.critical(f"Unhandled Exception (ID: {error_id}): {exc}", exc_info=True)
-    traceback.print_exc() # Print traceback for critical debugging
+    error_type = type(exc).__name__
+    logger.critical(f"Unhandled Exception (ID: {error_id}): {error_type}", exc_info=False) # Log type only
+    # traceback.print_exc() # Avoid printing full traceback to console by default
     return JSONResponse(
         status_code=500,
         content={"detail": f"An internal server error occurred. Error ID: {error_id}"},

@@ -1,24 +1,21 @@
 from typing import Any, Dict, Optional, Callable, List, Tuple, Literal, Coroutine
 import logging # Import logging
-import litellm
 import json
 import re
 import asyncio
-import traceback
 from collections import Counter
 from pydantic import ValidationError
 
 # --- Internal Imports (New Structure) ---
 from ..services.search import execute_batch_serper_search, SerperConfig, SearchResult
 from ..services.ranking import rerank_with_together_api
-from ..services.scraping import WebScraper
+from ..services.scraping import WebScraper, ExtractionResult
 from ..services.chunking import Chunker # Assuming placeholder exists
-from .schemas import PlannerOutput, SourceSummary, SearchRequest, WritingPlan # Import WritingPlan
+from .schemas import PlannerOutput, SourceSummary, SearchRequest # Removed WritingPlan
 from .prompts import (
     get_planner_prompt,
     get_summarizer_prompt,
     get_writer_initial_prompt,
-    get_writer_refinement_prompt,
     get_refiner_prompt,
     format_summaries_for_prompt as format_summaries_for_prompt_template,
     _WRITER_SYSTEM_PROMPT_BASE
@@ -28,12 +25,11 @@ from .config import AppSettings, ApiKeys, LLMConfig, get_litellm_params
 # Import the new service function
 from ..services.llm import call_litellm_acompletion
 
-# Import Custom Exceptions
+# Import Custom Exceptions - Remove unused ones
 from .exceptions import (
-    DeepResearchError, ConfigurationError, ValidationError, LLMError,
-    ExternalServiceError, SearchAPIError, RankingAPIError, ScrapingError,
-    ChunkingError, AgentExecutionError, LLMCommunicationError, LLMRateLimitError,
-    LLMOutputValidationError
+    ConfigurationError, ValidationError, LLMError,
+    ExternalServiceError, ScrapingError,
+    AgentExecutionError, LLMOutputValidationError
 )
 
 # --- Constants --- (Define near the top of the class or globally)
@@ -147,11 +143,9 @@ class DeepResearchAgent:
         try:
             # Chunker init can raise ValueError
             self.chunker = Chunker() 
-            # WebScraper init can raise ConfigurationError
+            # WebScraper init - Pass settings
             self.scraper = WebScraper(
-                strategies=scraper_strategies_override or settings.scraper_strategies,
-                llm_api_key=self.api_keys.openrouter_api_key.get_secret_value() if self.api_keys.openrouter_api_key else None,
-                # Pass other relevant params like llm_model if needed by LLM strategy
+                settings=settings, # Pass the AppSettings instance
                 debug=settings.scraper_debug
             )
             # SerperConfig init can raise ConfigurationError
@@ -461,13 +455,15 @@ class DeepResearchAgent:
             await self._send_ws_update("PLANNING", "END", "Research plan generated.", {"plan": plan_details})
 
         except (LLMError, ValidationError, json.JSONDecodeError) as e:
-            self._log(f"Planning phase failed: {e}", level=logging.ERROR, exc_info=True)
-            await self._send_ws_update("PLANNING", "ERROR", f"Failed to generate plan: {e}")
-            raise AgentExecutionError(f"Failed to generate a valid research plan: {e}") from e
+            error_msg = f"Planning phase failed: {type(e).__name__}"
+            self._log(error_msg, level=logging.ERROR, exc_info=False)
+            await self._send_ws_update("PLANNING", "ERROR", f"Failed to generate plan: {type(e).__name__}")
+            raise AgentExecutionError(f"Failed to generate a valid research plan: {type(e).__name__}") from e
         except Exception as e:
-            self._log(f"Unexpected error during planning phase: {e}", level=logging.CRITICAL, exc_info=True)
+            error_msg = f"Unexpected error during planning phase: {type(e).__name__}"
+            self._log(error_msg, level=logging.CRITICAL, exc_info=False)
             await self._send_ws_update("PLANNING", "ERROR", "Unexpected error during planning.")
-            raise AgentExecutionError(f"Unexpected error during planning: {e}") from e
+            raise AgentExecutionError(f"Unexpected error during planning: {type(e).__name__}") from e
 
         # Ensure planner_output is not None before proceeding
         if not planner_output_obj:
@@ -520,13 +516,15 @@ class DeepResearchAgent:
                  # Allow proceeding, the writer might handle this or fail later
 
         except ExternalServiceError as e:
-            self._log(f"Search phase failed: {e}", level=logging.ERROR, exc_info=True)
-            await self._send_ws_update("SEARCHING", "ERROR", f"Search API error: {e}")
+            error_msg = f"Search phase failed: {type(e).__name__}"
+            self._log(error_msg, level=logging.ERROR, exc_info=False)
+            await self._send_ws_update("SEARCHING", "ERROR", f"Search API error: {type(e).__name__}")
             raise # Re-raise to be caught by main handler or specific endpoint logic
         except Exception as e:
-            self._log(f"Unexpected error during initial search phase: {e}", level=logging.CRITICAL, exc_info=True)
+            error_msg = f"Unexpected error during initial search phase: {type(e).__name__}"
+            self._log(error_msg, level=logging.CRITICAL, exc_info=False)
             await self._send_ws_update("SEARCHING", "ERROR", "Unexpected error during search.")
-            raise AgentExecutionError(f"Unexpected error during initial search: {e}") from e
+            raise AgentExecutionError(f"Unexpected error during initial search: {type(e).__name__}") from e
 
         # --- 3. Reranking Phase ---
         top_sources: List[SearchResult] = []
@@ -582,16 +580,18 @@ class DeepResearchAgent:
                     await self._send_ws_update("RANKING", "END", f"Identified {len(sources_to_summarize)} sources for summarization, {len(sources_to_chunk)} for chunking.")
                     top_sources = sources_to_summarize # Keep variable name for later code? Or rename? Let's rename later if needed.
                     # Need to store sources_to_chunk for the next phase
-                
+
             except ExternalServiceError as e:
-                self._log(f"Reranking phase failed: {e}", level=logging.ERROR, exc_info=True)
-                await self._send_ws_update("RANKING", "ERROR", f"Reranking API error: {e}")
+                error_msg = f"Reranking phase failed: {type(e).__name__}"
+                self._log(error_msg, level=logging.ERROR, exc_info=False)
+                await self._send_ws_update("RANKING", "ERROR", f"Reranking API error: {type(e).__name__}")
                 # Non-critical? Could proceed with unranked results? For now, raise.
                 raise
             except Exception as e:
-                self._log(f"Unexpected error during reranking phase: {e}", level=logging.CRITICAL, exc_info=True)
+                error_msg = f"Unexpected error during reranking phase: {type(e).__name__}"
+                self._log(error_msg, level=logging.CRITICAL, exc_info=False)
                 await self._send_ws_update("RANKING", "ERROR", "Unexpected error during reranking.")
-                raise AgentExecutionError(f"Unexpected error during reranking: {e}") from e
+                raise AgentExecutionError(f"Unexpected error during reranking: {type(e).__name__}") from e
         else:
              self._log("Skipping reranking phase as there were no initial search results.", level=logging.INFO)
              await self._send_ws_update("RANKING", "INFO", "Skipped - No initial search results.")
@@ -625,16 +625,17 @@ class DeepResearchAgent:
                         scraped_content_cache[url] = scraped_content # Keep cache for now
                         successful_summaries += 1
                     else: # Handle None case from helper (should indicate failure)
-                         failed_summaries += 1
-                         self._log(f"[Summarization] Helper function returned None for {url}, indicating processing failure.")
-                         # Error WS update should be sent by helper
+                        failed_summaries += 1
+                        self._log(f"[Summarization] Helper function returned None for {url}, indicating processing failure.")
+                        # Error WS update should be sent by helper
                 except Exception as e:
                     failed_summaries += 1
-                    self._log(f"[Summarization] Exception processing source {url}: {e}", level=logging.ERROR, exc_info=True)
-                    # If _fetch_and_summarize raises an uncaught exception, log it here.
-                    # Usually, it should return None on failure.
+                    error_msg = f"[Summarization] Exception processing source {url}: {type(e).__name__}"
+                    self._log(error_msg, level=logging.ERROR, exc_info=False)
                     await self._send_ws_update("PROCESSING", "ERROR", f"Unexpected error summarizing {url}")
-            # --- End Sequential Loop ---
+                
+                # Add delay *within* the sequential loop
+                await asyncio.sleep(0.5) # Half-second delay
 
             self._log(f"Summarization complete. Successfully processed {successful_summaries}/{len(sources_to_summarize)} sources.", level=logging.INFO)
             await self._send_ws_update("PROCESSING", "INFO", f"Finished summarizing {successful_summaries} sources.")
@@ -678,7 +679,8 @@ class DeepResearchAgent:
                     # else: Helper returned empty list (logged internally) or None (shouldn't happen)
                 except Exception as e:
                     failed_chunking_sources += 1
-                    self._log(f"[Chunking] Error processing source {url}: {e}", level=logging.ERROR)
+                    error_msg = f"[Chunking] Error processing source {url}: {type(e).__name__}"
+                    self._log(error_msg, level=logging.ERROR, exc_info=False)
                     await self._send_ws_update("PROCESSING", "ERROR", f"Error processing chunks for {url}")
                 
                 # Add a short delay between requests to respect rate limits
@@ -688,7 +690,7 @@ class DeepResearchAgent:
             await self._send_ws_update("PROCESSING", "END", f"Finished chunk processing. Found {total_relevant_chunks} relevant chunks.")
 
         else:
-             self._log("Skipping chunking/reranking as no sources were designated.", level=logging.INFO)
+            self._log("Skipping chunking/reranking as no sources were designated.", level=logging.INFO)
         
         # --- Overall Processing Phase End ---
         await self._send_ws_update("PROCESSING", "END", f"Finished processing all initial sources ({len(all_processed_urls)} unique URLs).")
@@ -699,18 +701,31 @@ class DeepResearchAgent:
         await self._send_ws_update("FILTERING", "START", "Assembling context for initial report...")
 
         # Combine summaries and chunks into a unified list for the writer
-        # Add a 'type' field to distinguish them if needed by the prompt later
+        # Add a 'type' field and sequential 'rank' for citation generation
         writer_context_items = []
+        current_rank = 1
         if processed_summaries:
-            writer_context_items.extend([
-                {"type": "summary", "content": s.summary_content, "url": s.url, "title": s.title} 
-                for s in processed_summaries
-            ])
+            for s in processed_summaries:
+                 writer_context_items.append({
+                     "type": "summary", 
+                     "content": s.content, 
+                     "link": s.link, # Use link from SourceSummary
+                     "title": s.title,
+                     "rank": current_rank 
+                 })
+                 current_rank += 1
+            
         if processed_chunks:
-             writer_context_items.extend([
-                 {"type": "chunk", "content": c["chunk_content"], "url": c["url"], "title": c["title"], "score": c.get("score")}
-                 for c in processed_chunks
-             ])
+             for c in processed_chunks:
+                  writer_context_items.append({
+                      "type": "chunk", 
+                      "content": c["content"], 
+                      "link": c["link"], # Use link from chunk dict
+                      "title": c["title"], 
+                      "score": c.get("relevance_score"),
+                      "rank": current_rank # Add sequential rank
+                  })
+                  current_rank += 1
 
         # TODO: Implement context filtering/truncation if necessary, maybe prioritize summaries?
         # For now, pass all combined context. Need to update the prompt formatter.
@@ -729,20 +744,14 @@ class DeepResearchAgent:
             self._log("--- Phase 6: Initial Report Generation ---", level=logging.INFO)
             await self._send_ws_update("WRITING", "START", "Generating initial report draft...")
 
-            # Prepare summaries string for the prompt - NO, pass the list directly
-            # formatted_summaries = format_summaries_for_prompt_template(filtered_summaries)
-
             writer_prompt_messages = get_writer_initial_prompt(
                 user_query=user_query,
                 writing_plan=planner_output_obj.writing_plan.model_dump(), # Pass plan dict
-                # !! Pass the combined context - prompt function needs update !!
                 source_summaries=final_writer_context # Pass combined list
             )
-            # Messages list is already created by get_writer_initial_prompt
-            # messages = [
-            #      {"role": "system", "content": _WRITER_SYSTEM_PROMPT_BASE}, # Add system prompt if applicable
-            #      {"role": "user", "content": writer_prompt}
-            # ]
+
+            # Add a delay before the writer call
+            await asyncio.sleep(1.0) # 1-second delay before writer
 
             response, usage, cost = await call_litellm_acompletion(
                 messages=writer_prompt_messages, # Use the generated messages
@@ -758,13 +767,15 @@ class DeepResearchAgent:
             await self._send_ws_update("WRITING", "END", "Initial report draft generated.")
 
         except (LLMError, ValidationError) as e:
-            self._log(f"Initial report generation failed: {e}", level=logging.ERROR, exc_info=True)
-            await self._send_ws_update("WRITING", "ERROR", f"Failed to generate initial draft: {e}")
-            raise AgentExecutionError(f"Failed to generate initial report draft: {e}") from e
+            error_msg = f"Initial report generation failed: {type(e).__name__}"
+            self._log(error_msg, level=logging.ERROR, exc_info=False)
+            await self._send_ws_update("WRITING", "ERROR", f"Failed to generate initial draft: {type(e).__name__}")
+            raise AgentExecutionError(f"Failed to generate initial report draft: {type(e).__name__}") from e
         except Exception as e:
-            self._log(f"Unexpected error during initial report generation: {e}", level=logging.CRITICAL, exc_info=True)
+            error_msg = f"Unexpected error during initial report generation: {type(e).__name__}"
+            self._log(error_msg, level=logging.CRITICAL, exc_info=False)
             await self._send_ws_update("WRITING", "ERROR", "Unexpected error during initial writing.")
-            raise AgentExecutionError(f"Unexpected error generating initial report: {e}") from e
+            raise AgentExecutionError(f"Unexpected error generating initial report: {type(e).__name__}") from e
 
         # --- 7. Refinement Loop ---
         current_draft = initial_draft
@@ -830,10 +841,10 @@ class DeepResearchAgent:
                 self._log(f"Refinement search yielded {len(new_search_results)} results.", level=logging.INFO)
                 await self._send_ws_update("SEARCHING", "END", f"[Refinement Iteration {refinement_iteration}] Search complete.")
             except ExternalServiceError as e:
-                self._log(f"Refinement search failed (Iteration {refinement_iteration}): {e}", level=logging.ERROR)
+                error_msg = f"Refinement search failed (Iteration {refinement_iteration}): {type(e).__name__}"
+                self._log(error_msg, level=logging.ERROR, exc_info=False)
                 await self._send_ws_update("SEARCHING", "ERROR", f"[Refinement Iteration {refinement_iteration}] Search failed.")
-                # Decide whether to break or continue without new info
-                break # For now, break the loop on search failure
+                break
 
             # 7c. Filter & Process New Search Results
             new_relevant_sources: List[SearchResult] = []
@@ -843,9 +854,9 @@ class DeepResearchAgent:
                 self._log(f"Found {len(potential_new_sources)} potential new sources from refinement search.", level=logging.DEBUG)
 
                 if potential_new_sources:
-                    # Optional: Rerank these new sources against the search_request.query
                     # For simplicity, let's just take the top N for now
-                    num_new_to_process = min(len(potential_new_sources), self.settings.max_sources_per_refinement) # Use a new setting
+                    MAX_SOURCES_PER_REFINEMENT = 3  # Hardcoded value instead of self.settings.max_sources_per_refinement
+                    num_new_to_process = min(len(potential_new_sources), MAX_SOURCES_PER_REFINEMENT)
                     new_relevant_sources = potential_new_sources[:num_new_to_process]
                     self._log(f"Selected {len(new_relevant_sources)} new sources to process for refinement.", level=logging.INFO)
                 else:
@@ -855,12 +866,10 @@ class DeepResearchAgent:
 
             # 7d. Fetch, Summarize/Chunk New Relevant Info
             new_relevant_chunks: List[Dict[str, Any]] = []
-            new_summaries: List[Dict[str, Any]] = []
-            
             if new_relevant_sources:
                 self._log(f"[Refinement Iteration {refinement_iteration}] Processing {len(new_relevant_sources)} new sources...", level=logging.INFO)
                 await self._send_ws_update("PROCESSING", "START", f"[Refinement Iteration {refinement_iteration}] Processing {len(new_relevant_sources)} new sources...")
-                
+
                 new_source_map = {source.link: source for source in new_relevant_sources if source.link}
                 CHUNK_RELEVANCE_THRESHOLD = 0.5 # Same threshold as before
                 
@@ -877,7 +886,7 @@ class DeepResearchAgent:
                         
                         proc_result = await self._fetch_chunk_and_rerank(
                             url=url,
-                            query=refinement_query or user_query, # Use refinement query if available
+                            query=search_request.query, # Use refinement query if available
                             source=source,
                             threshold=CHUNK_RELEVANCE_THRESHOLD,
                             is_refinement=True # Mark as refinement chunking
@@ -892,7 +901,8 @@ class DeepResearchAgent:
                         # else: Helper returned empty list (logged internally)
                     except Exception as e:
                         failed_new += 1
-                        self._log(f"[Refinement Chunking] Error processing source {url}: {e}", level=logging.ERROR)
+                        error_msg = f"[Refinement Chunking] Error processing source {url}: {type(e).__name__}"
+                        self._log(error_msg, level=logging.ERROR, exc_info=False)
                         await self._send_ws_update("PROCESSING", "ERROR", f"[Refinement] Error processing chunks for {url}")
                     
                     # Add a short delay between requests to respect rate limits
@@ -907,8 +917,9 @@ class DeepResearchAgent:
             # 7e. Call Refiner LLM
             if new_relevant_chunks: # Check if we found relevant chunks
                 try:
-                    # The refiner needs the previous draft, the query that prompted the search, and the new info (chunks)
-                    # !! Need to update _call_refiner_llm and prompt to handle chunk dicts !!
+                    # Add delay before the refiner call
+                    await asyncio.sleep(1.0) # 1-second delay before refiner
+                    
                     refined_draft = await self._call_refiner_llm(
                         previous_draft=current_draft,
                         search_query=search_request.query,
@@ -919,16 +930,12 @@ class DeepResearchAgent:
                     await self._send_ws_update("REFINING", "IN_PROGRESS", f"Draft refined based on new chunk information (Iteration {refinement_iteration}).")
 
                 except (LLMError, AgentExecutionError) as e:
-                     self._log(f"Refinement LLM call failed (Iteration {refinement_iteration}): {e}", level=logging.ERROR)
+                     error_msg = f"Refinement LLM call failed (Iteration {refinement_iteration}): {type(e).__name__}"
+                     self._log(error_msg, level=logging.ERROR, exc_info=False)
                      await self._send_ws_update("REFINING", "ERROR", f"Refinement failed for iteration {refinement_iteration}.")
-                     # Decide whether to break loop or continue with previous draft
-                     break # Break loop on refinement failure for now
+                     break
                 else:
                      self._log(f"Skipping refiner LLM call as no new information was processed in iteration {refinement_iteration}.", level=logging.INFO)
-                     await self._send_ws_update("REFINING", "INFO", f"Skipping LLM refinement call - no new info (Iteration {refinement_iteration}).")
-                     # If no new info was found/processed, and a search was requested,
-                     # maybe we should break the loop anyway to avoid infinite loops if the LLM keeps asking.
-                     self._log("Ending refinement loop as no new information could be incorporated.", level=logging.INFO)
                 break
 
             # Small delay between iterations? Optional.
@@ -952,10 +959,10 @@ class DeepResearchAgent:
              self._log(f"Final report assembled (length: {len(final_report)} chars).", level=logging.INFO)
              await self._send_ws_update("FINALIZING", "END", "Final report assembled.")
         except Exception as e:
-             self._log(f"Error during final report assembly: {e}", level=logging.ERROR, exc_info=True)
+             error_msg = f"Error during final report assembly: {type(e).__name__}"
+             self._log(error_msg, level=logging.ERROR, exc_info=False)
              await self._send_ws_update("FINALIZING", "ERROR", "Failed to assemble final report.")
-             # Fallback: return the latest draft if assembly fails?
-             final_report = current_draft # Use the last good draft
+             final_report = current_draft
              self._log("Using latest draft as final report due to assembly error.", level=logging.WARNING)
              await self._send_ws_update("FINALIZING", "INFO", "Using latest draft due to assembly error.")
 
@@ -993,68 +1000,80 @@ class DeepResearchAgent:
         source: SearchResult, # Pass the original source for context (title, snippet)
         is_refinement: bool = False # Flag if called during refinement
     ) -> Optional[Tuple[SourceSummary, str]]: # Return summary and scraped content
-        """Fetches content, summarizes it, handles errors, and sends WS updates."""
+        """Fetches content, summarizes it, and sends WS updates."""
         action_prefix = "[Refinement] " if is_refinement else ""
         stage = "PROCESSING" # Consistent stage for WS updates
 
         try:
-            self._log(f"{action_prefix}Fetching and processing content from: {url}", level=logging.INFO)
+            # STEP 1: Scrape content using the updated scraper
+            self._log(f"{action_prefix}Fetching content from: {url}", level=logging.INFO)
             await self._send_ws_update(stage, "IN_PROGRESS", f"{action_prefix}Fetching content...", {"source_url": url, "action": "Fetching"})
 
-            # Call the main scrape method, which returns a dict of ExtractionResult
-            scrape_results = await self.scraper.scrape(url)
+            # Call the refactored scrape method - it returns a single ExtractionResult
+            # Add args for download_pdfs etc. if agent needs to control it, otherwise use defaults
+            scrape_result: ExtractionResult = await self.scraper.scrape(url)
             
-            # Find the successfully extracted content from the results dict
-            scraped_content = None
-            successful_strategy = None
-            for strategy_name, result in scrape_results.items():
-                # Check if the ExtractionResult has content (updated structure)
-                if result.content:
-                    scraped_content = result.content
-                    successful_strategy = strategy_name
-                    self._log(f"{action_prefix}Successfully scraped {len(scraped_content)} chars from {url} using strategy: {successful_strategy}", level=logging.DEBUG)
-                    break # Use the first successful result
-            
-            if not scraped_content or not scraped_content.strip():
-                raise ScrapingError(f"No content successfully extracted from {url} by any strategy.")
-            
-            await self._send_ws_update(stage, "IN_PROGRESS", f"{action_prefix}Summarizing content...", {"source_url": url, "action": "Summarizing"})
+            # STEP 2: Check for successful content extraction
+            scraped_content: Optional[str] = None
+            scrape_source_name: str = "unknown_source" 
 
+            if scrape_result and scrape_result.content and scrape_result.content.strip():
+                scraped_content = scrape_result.content
+                scrape_source_name = scrape_result.name # Get source name from result
+                self._log(f"{action_prefix}Successfully scraped {len(scraped_content)} chars from {url} (source: {scrape_source_name})", level=logging.DEBUG)
+            else:
+                # Handle case where scrape succeeded but content is empty/None, or scrape failed implicitly
+                error_detail = f"ExtractionResult content was empty or None." if scrape_result else f"scrape() returned None or failed."
+                raise ScrapingError(f"No valid content extracted from {url}. {error_detail}")
+            
+            # STEP 3: Summarize with LLM
+            await self._send_ws_update(stage, "IN_PROGRESS", f"{action_prefix}Summarizing content...", {"source_url": url, "action": "Summarizing"})
             self._log(f"{action_prefix}Summarizing content for: {url}", level=logging.INFO)
 
-            summarizer_prompt = get_summarizer_prompt(query, scraped_content, source.title, source.snippet)
+            summarizer_prompt = get_summarizer_prompt(
+                user_query=query,
+                source_title=source.title or "Unknown Title",
+                source_link=url,
+                source_content=scraped_content # Pass the extracted string content
+            )
             messages = [{"role": "user", "content": summarizer_prompt}]
 
             response, usage, cost = await call_litellm_acompletion(
                 messages=messages,
                 llm_config=self.summarizer_llm_config,
             )
+
             summary_content = response.choices[0].message.content or ""
+            if not summary_content.strip():
+                raise LLMError("Summarizer returned empty content.")
+
+            # STEP 4: Log usage and update progress
             self._log_and_update_usage('summarizer', usage, cost)
 
-            if not summary_content.strip():
-                raise LLMOutputValidationError(f"Summarizer returned empty content for {url}")
-
             summary = SourceSummary(
-                 url=url,
-                 title=source.title or "N/A", # Use original title
-                 summary_content=summary_content
+                title=source.title or "Unknown Title",
+                 link=url, # Use 'link' as per schema
+                content=summary_content, # Use 'content' as per schema
+                content_type='summary' # Add required content_type
+                # strategy removed as it's not in schema
             )
-            self._log(f"{action_prefix}Successfully summarized: {url} (Summary length: {len(summary_content)})", level=logging.INFO)
-            await self._send_ws_update(stage, "INFO", f"{action_prefix}Processing complete.")
-
-            return summary, scraped_content # Return both
-
-        except (ScrapingError, ChunkingError, LLMError, ValidationError) as e:
-            self._log(f"{action_prefix}Failed to process source {url}: {e}", level=logging.ERROR)
-            await self._send_ws_update(stage, "ERROR", f"{action_prefix}Processing failed.")
-            return None # Indicate failure for this source
+            
+            self._log(f"{action_prefix}Successfully summarized content from {url}: {len(summary_content)} chars", level=logging.INFO)
+            await self._send_ws_update(stage, "SUCCESS", f"{action_prefix}Successfully summarized content from {url}", {"source_url": url})
+            
+            return summary, scraped_content # Return summary and original content
+            
+        except (ScrapingError, LLMError) as e:
+            error_msg = f"{action_prefix}Error processing {url}: {type(e).__name__}"
+            self._log(error_msg, level=logging.WARNING, exc_info=False)
+            await self._send_ws_update(stage, "ERROR", f"{action_prefix}Failed to summarize {url}: {type(e).__name__}", {"source_url": url, "error": type(e).__name__})
+            return None  # Indicate failure
         except Exception as e:
-            self._log(f"{action_prefix}Unexpected error processing source {url}: {e}", level=logging.ERROR, exc_info=True)
-            await self._send_ws_update(stage, "ERROR", f"{action_prefix}Unexpected processing error.")
-            return None # Indicate failure
+            error_msg = f"{action_prefix}Unexpected error processing {url}: {type(e).__name__}"
+            self._log(error_msg, level=logging.ERROR, exc_info=False)
+            await self._send_ws_update(stage, "ERROR", f"{action_prefix}Unexpected error processing {url}", {"source_url": url, "error": type(e).__name__})
+            return None  # Indicate failure
 
-    # --- NEW HELPER FUNCTION ---
     async def _fetch_chunk_and_rerank(
         self,
         url: str,
@@ -1064,129 +1083,122 @@ class DeepResearchAgent:
         is_refinement: bool = False # Flag if called during refinement
     ) -> List[Dict[str, Any]]: # Return list of relevant chunk dicts
         """Fetches, chunks, reranks chunks, filters, and sends WS updates."""
-        action_prefix = "[Refinement] " if is_refinement else "[Initial Chunking] "
+        action_prefix = "[Refinement] " if is_refinement else ""
         stage = "PROCESSING" # Consistent stage for WS updates
         relevant_chunks_info = []
 
         try:
+            # STEP 1: Scrape content
             self._log(f"{action_prefix}Fetching content for chunking from: {url}", level=logging.INFO)
             await self._send_ws_update(stage, "IN_PROGRESS", f"{action_prefix}Fetching content...", {"source_url": url, "action": "Fetching"})
 
-            # 1. Scrape Content (Simplified extraction from _fetch_and_summarize)
-            scrape_results = await self.scraper.scrape(url)
-            scraped_content = None
-            successful_strategy = None
-            for strategy_name, result in scrape_results.items():
-                if result.content:
-                    scraped_content = result.content
-                    successful_strategy = strategy_name
-                    self._log(f"{action_prefix}Successfully scraped {len(scraped_content)} chars from {url} using strategy: {successful_strategy}", level=logging.DEBUG)
-                    break
+            # Call the refactored scrape method - it returns a single ExtractionResult
+            scrape_result: ExtractionResult = await self.scraper.scrape(url)
             
-            if not scraped_content or not scraped_content.strip():
-                raise ScrapingError(f"No content successfully extracted from {url} by any strategy for chunking.")
+            # STEP 2: Check for successful content extraction
+            scraped_content: Optional[str] = None
+            # scrape_source_name = "unknown_source" # Not needed here
 
+            if scrape_result and scrape_result.content and scrape_result.content.strip():
+                scraped_content = scrape_result.content
+                # scrape_source_name = scrape_result.name \
+                self._log(f"{action_prefix}Successfully scraped {len(scraped_content)} chars from {url} (source: {scrape_result.name})", level=logging.DEBUG)
+            else:
+                error_detail = f"ExtractionResult content was empty or None." if scrape_result else f"scrape() returned None or failed."
+                raise ScrapingError(f"No valid content extracted from {url} by any strategy for chunking. {error_detail}")
+
+            # STEP 3: Chunk the content
             await self._send_ws_update(stage, "IN_PROGRESS", f"{action_prefix}Chunking content...", {"source_url": url, "action": "Chunking"})
             self._log(f"{action_prefix}Chunking content for: {url}", level=logging.INFO)
+            chunker = Chunker(chunk_size=2048, chunk_overlap=100, min_chunk_size=256)
+            doc_to_chunk = [{'title': source.title or "Unknown Title", 'link': url, 'content': scraped_content}]
+            chunked_docs = chunker.chunk_and_label(doc_to_chunk)
+            
+            if not chunked_docs:
+                self._log(f"{action_prefix}Chunking produced no chunks for {url}", level=logging.WARNING)
+                await self._send_ws_update(stage, "WARNING", f"{action_prefix}Chunking produced no chunks for {url}")
+                return []
+            
+            chunk_contents = [doc['content'] for doc in chunked_docs]
+            self._log(f"{action_prefix}Created {len(chunk_contents)} chunks from {url} (avg length: {sum(len(c) for c in chunk_contents)/max(1, len(chunk_contents)):.0f} chars)", level=logging.INFO)
+            await self._send_ws_update(stage, "IN_PROGRESS", f"{action_prefix}Reranking {len(chunk_contents)} chunks...", {"source_url": url, "action": "Reranking"})
 
-            # 2. Chunk Content
-            # Use recursive chunking by default
-            chunks = self.chunker.chunk(scraped_content, recursive=True) 
-            if not chunks:
-                 self._log(f"{action_prefix}Chunking resulted in no chunks for {url}. Skipping reranking.", level=logging.WARNING)
-                 await self._send_ws_update(stage, "INFO", f"{action_prefix}No chunks generated.")
-                 return [] # Return empty list if no chunks
+            # STEP 4: Rerank chunks against the query
+            if not chunk_contents:
+                # Skip empty chunking result
+                self._log(f"{action_prefix}No chunks to rerank for {url}", level=logging.WARNING)
+                await self._send_ws_update(stage, "WARNING", f"{action_prefix}No chunks to rerank for {url}")
+                return []
+                
+            reranked_chunks = await rerank_with_together_api(
+                query=query,
+                documents=chunk_contents,
+                model=self.reranker_model,
+                api_key=self.together_api_key,
+                relevance_threshold=threshold
+            )
+            self._log(f"{action_prefix}Reranking complete for {len(chunk_contents)} chunks", level=logging.DEBUG)
 
-            self._log(f"{action_prefix}Generated {len(chunks)} chunks for {url}. Reranking...", level=logging.DEBUG)
-            await self._send_ws_update(stage, "IN_PROGRESS", f"{action_prefix}Reranking {len(chunks)} chunks...", {"source_url": url, "action": "Reranking Chunks"})
+            # STEP 5: Filter chunks below threshold
+            filtered_chunks = []
+            for chunk_result in reranked_chunks:
+                chunk_index = chunk_result['index']
+                chunk_score = chunk_result['score']
+                if 0 <= chunk_index < len(chunked_docs):
+                    chunk_doc = chunked_docs[chunk_index].copy()
+                    chunk_doc['relevance_score'] = chunk_score
+                    chunk_doc['rank'] = len(filtered_chunks) + 1
+                    filtered_chunks.append(chunk_doc)
 
-            # 3. Rerank Chunks
-            try:
-                # Ensure we have API key for reranking
-                if not self.together_api_key:
-                     raise ConfigurationError("TOGETHER_API_KEY is required for reranking chunks but not found.")
-                     
-                reranked_chunk_data = await rerank_with_together_api(
-                    query=query, # Rerank against the provided query
-                    documents=chunks, # Pass the text chunks
-                    model=self.reranker_model,
-                    api_key=self.together_api_key,
-                    # Apply the specific threshold for chunks here
-                    relevance_threshold=threshold, 
-                )
-                # reranked_chunk_data is List[Dict[str, Any]] with 'index' and 'score'
-
-                self._log(f"{action_prefix}Reranking identified {len(reranked_chunk_data)} relevant chunks (score >= {threshold}) for {url}.", level=logging.DEBUG)
-
-                # 4. Filter and Collect Relevant Chunks
-                for chunk_result in reranked_chunk_data:
-                    chunk_index = chunk_result['index']
-                    chunk_score = chunk_result['score']
-                    if 0 <= chunk_index < len(chunks):
-                        relevant_chunks_info.append({
-                            "url": url,
-                            "title": source.title or "N/A",
-                            "chunk_content": chunks[chunk_index],
-                            "score": chunk_score,
-                            "type": "chunk" # Add type identifier
-                        })
-                    else:
-                         self._log(f"{action_prefix}Invalid chunk index {chunk_index} returned by reranker for {url}. Skipping.", level=logging.WARNING)
-
-            except (ConfigurationError, RankingAPIError, ValueError) as rerank_e:
-                 # Log specific reranking errors but potentially continue processing other URLs
-                 self._log(f"{action_prefix}Failed to rerank chunks for {url}: {rerank_e}", level=logging.ERROR)
-                 await self._send_ws_update(stage, "ERROR", f"{action_prefix}Chunk reranking failed.")
-                 # Decide if we should raise or just return empty list for this URL
-                 return [] # Return empty for this URL on reranking failure
-
-            self._log(f"{action_prefix}Finished processing. Found {len(relevant_chunks_info)} relevant chunks for: {url}", level=logging.INFO)
-            await self._send_ws_update(stage, "INFO", f"{action_prefix}Chunk processing complete.")
-            return relevant_chunks_info
-
-        except (ScrapingError, ChunkingError) as e:
-             self._log(f"{action_prefix}Failed to fetch/chunk source {url}: {e}", level=logging.ERROR)
-             await self._send_ws_update(stage, "ERROR", f"{action_prefix}Fetching/Chunking failed.")
-             return [] # Indicate failure for this source
+            # Filter chunks by threshold
+            self._log(f"{action_prefix}{len(filtered_chunks)}/{len(chunk_contents)} chunks passed threshold {threshold} for {url}", level=logging.INFO)
+            
+            # STEP 6: Return relevant chunks
+            await self._send_ws_update(stage, "SUCCESS", f"{action_prefix}Processed {len(filtered_chunks)} relevant chunks from {url}", {"source_url": url})
+            return filtered_chunks
+            
+        except ScrapingError as e:
+            error_msg = f"{action_prefix}Scraping error for {url}: {type(e).__name__}"
+            self._log(error_msg, level=logging.WARNING, exc_info=False)
+            await self._send_ws_update(stage, "ERROR", f"{action_prefix}Failed to fetch content from {url}: {type(e).__name__}", {"source_url": url, "error": type(e).__name__})
+            return []
         except Exception as e:
-             self._log(f"{action_prefix}Unexpected error processing source {url} for chunking: {e}", level=logging.ERROR, exc_info=True)
-             await self._send_ws_update(stage, "ERROR", f"{action_prefix}Unexpected chunk processing error.")
-             return [] # Indicate failure
+            error_msg = f"{action_prefix}Unexpected error processing {url}: {type(e).__name__}"
+            self._log(error_msg, level=logging.ERROR, exc_info=False)
+            await self._send_ws_update(stage, "ERROR", f"{action_prefix}Unexpected error processing {url}", {"source_url": url, "error": type(e).__name__})
+            return []
 
-    def _assemble_final_report(self, report_draft: str, all_summaries_unfiltered: list[SourceSummary]) -> str:
+    def _assemble_final_report(self, report_draft: str, writer_context_items: list) -> str: # Adjusted type hint for context
          """Assembles the final report with references, matching oldagent logic."""
          self._log("Assembling final report with references...", level=logging.DEBUG)
-         # Clean draft first
          cleaned_draft = re.sub(r'<search_request.*?>', '', report_draft, flags=re.IGNORECASE).strip()
 
          cited_links = set()
-         reference_list_items = [] # Stores tuples: (citation_num, display_title, link)
+         reference_list_items = []
 
-         if all_summaries_unfiltered:
-             self._log(f"Checking {len(all_summaries_unfiltered)} processed sources for citations in draft...", level=logging.DEBUG)
-             for idx, summary_info in enumerate(all_summaries_unfiltered):
-                 citation_marker = f"[{idx+1}]" # Marker corresponding to format_summaries_for_prompt
-                 link = str(summary_info.link) # Ensure string
-                 display_title = summary_info.original_title or summary_info.title or 'Untitled'
+         if writer_context_items:
+             self._log(f"Checking {len(writer_context_items)} processed sources/chunks for citations in draft...", level=logging.DEBUG)
+             for item in writer_context_items:
+                 # Removed if item['type'] == 'summary': - Check all items for rank
+                 citation_marker = f"[{item['rank']}]"
+                 # Consistently use 'link', assuming Phase 5 adds it correctly for both types
+                 link = item.get('link') # Default to None if key missing
+                 display_title = item.get('title', 'Untitled') # Default title
 
-                 # Check if marker exists in draft
                  if citation_marker in cleaned_draft:
                      if link and link not in cited_links:
-                         # Store with original citation number
-                         reference_list_items.append((idx + 1, display_title, link))
-                         cited_links.add(link)
-                         self._log(f"  Found citation {citation_marker} for '{display_title}' ({link})", level=logging.DEBUG)
-                 # else:
-                 #    self._log(f"  Citation {citation_marker} for '{display_title}' not found in draft.", level=logging.DEBUG)
+                         # Ensure link is converted to string if it's a Pydantic URL type from SourceSummary
+                         link_str = str(link) 
+                         reference_list_items.append((item['rank'], display_title, link_str))
+                         cited_links.add(link_str)
+                         self._log(f"  Found citation {citation_marker} for '{display_title}' ({link_str})", level=logging.DEBUG)
 
              if reference_list_items:
-                 # Sort by the original citation number
-                 reference_list_items.sort(key=lambda x: x[0])
+                 reference_list_items.sort(key=lambda x: x[0]) # Sort by the rank added in Phase 5
 
-                 # Build reference string with new sequential numbering (1, 2, 3...)
                  reference_list_str = "\n\nReferences:\n"
-                 for i, (_, title, url) in enumerate(reference_list_items):
-                      # Format like: 1. [Title](url)
+                 # Use the sorted list index for final numbering (1, 2, 3...)
+                 for i, (_, title, url) in enumerate(reference_list_items): 
                       reference_list_str += f"{i+1}. [{title}]({url})\n"
 
                  final_report = cleaned_draft + "\n" + reference_list_str.strip()

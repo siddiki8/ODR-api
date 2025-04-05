@@ -81,6 +81,8 @@ _SUMMARIZER_USER_MESSAGE_TEMPLATE = \
 """
 Please summarize the following text content extracted from the source titled '{source_title}' (URL: {source_link}). Focus on information that might be relevant for a research report addressing the query: '{user_query}'
 
+Note: The 'Text Content' below may contain the original page content followed by appended text extracted from a linked PDF document found on the page (often separated by '<hr/>'). Please summarize all relevant information presented.
+
 Text Content:
 ```
 {source_content}

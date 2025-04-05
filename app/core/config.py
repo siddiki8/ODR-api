@@ -109,22 +109,14 @@ class AppSettings(BaseSettings):
     serper_base_url: HttpUrl = Field("https://google.serper.dev", alias='SERPER_BASE_URL')
     serper_default_location: str = 'us'
     serper_timeout: int = Field(15, gt=0)
-    scraper_strategies: List[str] = Field(default=['no_extraction'], min_items=1)
     scraper_debug: bool = False
+    # PDF Handling Settings
+    scraper_download_pdfs: bool = Field(False, alias='SCRAPER_DOWNLOAD_PDFS')
+    scraper_pdf_save_dir: str = Field("downloaded_pdfs", alias='SCRAPER_PDF_SAVE_DIR')
+    scraper_max_pdf_size_mb: int = Field(512, alias='SCRAPER_MAX_PDF_SIZE_MB', gt=0)
     max_initial_search_tasks: int = Field(3, ge=1, le=10)
     top_m_full_text_sources: int = Field(3, ge=1, le=20)
     max_refinement_iterations: int = Field(2, ge=0, le=5)
-
-    # Example validator for scraper_strategies if needed
-    # @field_validator('scraper_strategies')
-    # def check_scraper_strategies(cls, v):
-    #     allowed_strategies = ['no_extraction', 'some_other_strategy'] # Define allowed ones
-    #     if not v:
-    #         raise ValueError('scraper_strategies cannot be empty')
-    #     for strategy in v:
-    #         if strategy not in allowed_strategies:
-    #             raise ValueError(f"Invalid scraper strategy: {strategy}. Allowed: {allowed_strategies}")
-    #     return v
 
     def get_model_name(self, role: Literal['planner', 'summarizer', 'writer']) -> str:
         if self.llm_provider == 'google':
@@ -138,20 +130,6 @@ class ResearchRequest(BaseModel):
     planner_llm_config: Optional[LLMConfig] = None
     summarizer_llm_config: Optional[LLMConfig] = None
     writer_llm_config: Optional[LLMConfig] = None
-    scraper_strategies: Optional[List[str]] = Field(None, min_items=1)
-
-    # Optional: Add validator for scraper_strategies in Request if needed
-    # @field_validator('scraper_strategies')
-    # def check_request_scraper_strategies(cls, v):
-    #     if v is not None:
-    #         # Reuse validation logic or define specific allowed strategies for request override
-    #         allowed_strategies = ['no_extraction', 'some_other_strategy'] # Example
-    #         if not v:
-    #             raise ValueError('scraper_strategies override cannot be an empty list')
-    #         for strategy in v:
-    #             if strategy not in allowed_strategies:
-    #                 raise ValueError(f"Invalid scraper strategy override: {strategy}. Allowed: {allowed_strategies}")
-    #     return v
 
 class ResearchResponse(BaseModel):
     """Response model for the /research endpoint."""
@@ -167,10 +145,10 @@ def get_litellm_params(
     provider: Literal['google', 'openrouter'], 
     api_keys: ApiKeys # Expecting an instantiated ApiKeys object
 ) -> Dict[str, Any]:
-    """Prepares LiteLLM parameters, ensuring required keys are present."""
+    """Prepares LiteLLM parameters, ensuring required keys and API base are set."""
     
     # Start with base config parameters (temp, max_tokens etc.)
-    params = config.model_dump(exclude_none=True, exclude={'provider'})
+    params = config.model_dump(exclude_none=True, exclude={'provider', 'api_base'})
     
     print("\n=== LiteLLM Configuration ===")
     
@@ -192,6 +170,8 @@ def get_litellm_params(
         model_name = params.get('model', '')
         if not model_name.startswith('gemini/'):
              params['model'] = f"gemini/{model_name}"
+        # Google provider typically does not require api_base
+        params.pop('api_base', None) # Remove api_base if present for Google
              
     elif provider == 'openrouter':
         openrouter_key_secret = api_keys.openrouter_api_key
@@ -210,14 +190,17 @@ def get_litellm_params(
         model_name = params.get('model', '')
         if not model_name.startswith('openrouter/'):
              params['model'] = f"openrouter/{model_name}"
+             
+        # Explicitly set api_base for OpenRouter
+        params['api_base'] = "https://openrouter.ai/api/v1"
     
-    # Convert api_base from HttpUrl to string if present
-    if 'api_base' in params and isinstance(params['api_base'], HttpUrl):
-         params['api_base'] = str(params['api_base'])
+    # Convert HttpUrl api_base to string (should not be needed now as we set it above)
+    # if 'api_base' in params and isinstance(params['api_base'], HttpUrl):
+    #      params['api_base'] = str(params['api_base'])
          
-    # Clear explicit API key if None
-    if 'api_key' in params and params['api_key'] is None:
-        del params['api_key']
+    # Clear explicit API key if None (should not be needed with ConfigurationError checks)
+    # if 'api_key' in params and params['api_key'] is None:
+    #     del params['api_key']
         
     print(f"Model: {params.get('model')}")
     print(f"API Base: {params.get('api_base')}")

@@ -6,6 +6,7 @@ import traceback
 import uuid
 import json
 import asyncio # Keep asyncio for potential use elsewhere, though direct sleeps removed
+from typing import Dict, Any, Optional # <-- Import Dict, Any, Optional
 
 # Import configuration, models, and the agent
 from .core.config import AppSettings, ApiKeys, ResearchRequest, ResearchResponse
@@ -53,11 +54,6 @@ def get_api_keys() -> ApiKeys:
         # This indicates a critical startup failure
         raise ConfigurationError("API keys could not be loaded.")
     return api_keys
-
-# --- Logging Callback --- #
-def api_logger(message: str, level: int = logging.INFO):
-    # Allow specifying log level
-    logger.log(level, message)
 
 # --- Exception Handlers --- #
 
@@ -162,36 +158,34 @@ async def run_research(
     
     Takes a user query and optional configuration overrides.
     Returns the generated report and usage statistics.
+    ---
+    DEPRECATED: This synchronous endpoint is no longer functional. 
+    Please use the WebSocket endpoint at /ws/research.
     """
-    request_id = uuid.uuid4()
-    logger.info(f"[Request ID: {request_id}] Received research request for query: '{request.query[:50]}...'")
-
-    # Initialization is wrapped implicitly by dependency injection calling get_settings/get_api_keys
-    # and the ConfigurationError handler will catch issues there.
-    # We might add specific validation for request content here if needed,
-    # but Pydantic handles base validation.
-
-    # The agent initialization itself can raise ConfigurationError or ValidationError
-    # Let the global handlers catch these.
-    agent = DeepResearchAgent(
-        settings=settings,
-        api_keys=keys,
-        planner_llm_override=request.planner_llm_config,
-        summarizer_llm_override=request.summarizer_llm_config,
-        writer_llm_override=request.writer_llm_config,
-        scraper_strategies_override=request.scraper_strategies,
-        logger_callback=lambda msg, level=logging.INFO: api_logger(f"[Agent - Request {request_id}] {msg}", level=level) # Pass request ID to agent logs
+    # Immediately raise an error indicating deprecation and pointing to WebSocket
+    raise HTTPException(
+        status_code=404, # Or 400 Bad Request, 404 seems reasonable for 'not found anymore'
+        detail="This synchronous endpoint is deprecated and no longer functional. Please use the WebSocket endpoint at /ws/research."
     )
-
-    # The run_deep_research method can raise various custom exceptions
-    # Let the global handlers catch these.
-    logger.info(f"[Request ID: {request_id}] Starting deep research process...")
-    result_dict = await agent.run_deep_research(request.query)
-    logger.info(f"[Request ID: {request_id}] Deep research process completed successfully.")
-
-    # Return the results formatted according to the response model
-    # Add request ID to response for tracing? Optional.
-    return ResearchResponse(**result_dict)
+    
+    # --- Removed Old Logic --- 
+    # request_id = uuid.uuid4()
+    # logger.info(f"[Request ID: {request_id}] Received research request for query: '{request.query[:50]}...')
+    # agent = DeepResearchAgent(
+    #     settings=settings,
+    #     api_keys=keys,
+    #     planner_llm_override=request.planner_llm_config,
+    #     summarizer_llm_override=request.summarizer_llm_config,
+    #     writer_llm_override=request.writer_llm_config,
+    #     # These parameters are incorrect/missing based on current agent __init__
+    #     # scraper_strategies_override=request.scraper_strategies, 
+    #     # logger_callback=lambda msg, level=logging.INFO: logger.info(f"[Agent - Request {request_id}] {msg}") 
+    # )
+    # logger.info(f"[Request ID: {request_id}] Starting deep research process...")
+    # result_dict = await agent.run_deep_research(request.query)
+    # logger.info(f"[Request ID: {request_id}] Deep research process completed successfully.")
+    # return ResearchResponse(**result_dict)
+    # --- End Removed Old Logic ---
 
 # WebSocket Endpoint (Updated)
 @app.websocket("/ws/research")
@@ -229,7 +223,6 @@ async def websocket_research(
             connection_active = False # Assume connection is broken
 
     # Define agent type hint
-    from typing import Optional # Import Optional if not already
     agent: Optional[DeepResearchAgent] = None # Define agent variable
 
     try:
@@ -276,10 +269,9 @@ async def websocket_research(
                 planner_llm_override=request.planner_llm_config,
                 summarizer_llm_override=request.summarizer_llm_config,
                 writer_llm_override=request.writer_llm_config,
-                scraper_strategies_override=request.scraper_strategies,
-                # Pass the logger callback AND the websocket callback
-                logger_callback=lambda msg, level=logging.INFO: api_logger(f"[Agent - WS Request {request_id}] {msg}", level=level),
-                websocket_callback=send_status_update # Pass the function defined above
+                max_search_tasks_override=request.max_search_tasks,
+                llm_provider_override=request.llm_provider,
+                websocket_callback=send_status_update
             )
             await send_status_update("INITIALIZING", "END", "Agent initialized successfully.")
             logger.info(f"[WS Request ID: {request_id}] Research agent instantiated.")

@@ -1,413 +1,210 @@
-from typing import List, Dict, Any
-import re
+"""
+Service for chunking text documents using LangChain text splitters.
+
+Replaces the previous custom Chunker class with a function leveraging
+MarkdownHeaderTextSplitter and RecursiveCharacterTextSplitter for 
+better semantic chunking, especially for Markdown content.
+"""
+
+import asyncio
 import logging
+from typing import List, Dict, Any, Optional
+
+# LangChain imports
+from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
+from langchain_core.documents import Document # Import Document type
 
 # Import custom exceptions
 from ..core.exceptions import ChunkingError
 
 logger = logging.getLogger(__name__)
 
-"""
-Chonk
-"""
-
-# TODO: Implement or paste the Chunker class definition here.
-# It should likely have a method like `chunk(text: str) -> List[str]`
-
-class Chunker:
+def chunk_document( 
+    doc_content: str, 
+    metadata: Dict[str, Any], # Metadata to attach to chunks
+    chunk_size: int = 2048, # Target chunk size (chars)
+    chunk_overlap: int = 100, # Overlap between chunks (chars)
+    min_chunk_size: int = 256, # Minimum size for a chunk to be kept
+) -> List[Document]:
     """
-    Chunker service that splits documents into smaller, semantically meaningful chunks.
-    Supports recursive chunking for hierarchical document processing.
+    Chunks a single document string using LangChain splitters.
+
+    First attempts to split based on Markdown headers, then uses recursive character 
+    splitting on any resulting sections that are still larger than chunk_size.
+
+    Args:
+        doc_content: The string content of the document.
+        metadata: Original metadata to be attached to each resulting chunk Document.
+        chunk_size: Target maximum size for each chunk (in characters).
+        chunk_overlap: Character overlap between consecutive chunks.
+        min_chunk_size: Minimum character length for a chunk to be kept.
+
+    Returns:
+        A list of LangChain Document objects representing the chunks.
+    
+    Raises:
+        ChunkingError: Wraps exceptions raised during the splitting process.
     """
-    
-    def __init__(self, 
-                 chunk_size: int = 512, 
-                 chunk_overlap: int = 50,
-                 min_chunk_size: int = 100,
-                 max_chunks: int = 1000):
-        """
-        Initialize the chunker with size parameters.
-        
-        Args:
-            chunk_size: Target size for chunks in characters
-            chunk_overlap: Number of characters to overlap between chunks
-            min_chunk_size: Minimum size for a valid chunk
-            max_chunks: Maximum number of chunks to return (default: 1000, below rerank API limit of 1024)
+    if not doc_content or not isinstance(doc_content, str):
+        logger.warning("Received empty or non-string document content, returning no chunks.")
+        return []
 
-        Raises:
-            ValueError: If chunk sizes are invalid (e.g., negative, overlap too large).
-        """
-        if chunk_size <= 0:
-            raise ValueError("chunk_size must be positive.")
-        if chunk_overlap < 0:
-            raise ValueError("chunk_overlap cannot be negative.")
-        if min_chunk_size < 0:
-            raise ValueError("min_chunk_size cannot be negative.")
-        if chunk_overlap >= chunk_size:
-            raise ValueError("chunk_overlap must be smaller than chunk_size.")
-        if min_chunk_size > chunk_size:
-            raise ValueError("min_chunk_size cannot be larger than chunk_size.")
-        if max_chunks <= 0:
-            raise ValueError("max_chunks must be positive.")
+    final_chunks = []
+    try:
+        # Define headers to split on (adjust levels as needed)
+        headers_to_split_on = [
+            ("#", "Header 1"),
+            ("##", "Header 2"),
+            ("###", "Header 3"),
+        ]
+        markdown_splitter = MarkdownHeaderTextSplitter(
+            headers_to_split_on=headers_to_split_on,
+            strip_headers=False # Keep header text in the chunk content
+        )
+        
+        # Split by headers
+        md_header_splits = markdown_splitter.split_text(doc_content)
+        logger.debug(f"Markdown split created {len(md_header_splits)} initial sections.")
 
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
-        self.min_chunk_size = min_chunk_size
-        self.max_chunks = max_chunks
-        logger.debug(f"Chunker initialized with size={chunk_size}, overlap={chunk_overlap}, "
-                    f"min_size={min_chunk_size}, max_chunks={max_chunks}")
-    
-    def _strip_html(self, text: str) -> str:
-        """
-        Strip HTML tags from text before chunking.
-        This is a simple implementation - more comprehensive HTML cleaning should be 
-        done before the text reaches the chunker.
-        """
-        if not text:
-            return ""
-            
-        # Log only the length, not the content
-        input_length = len(text)
-        logger.debug(f"Stripping HTML from text of length {input_length} chars")
-        
-        # Strip common HTML tags
-        import re
-        # Remove script, style tags and their content
-        text = re.sub(r'<script.*?>.*?</script>', ' ', text, flags=re.DOTALL|re.IGNORECASE)
-        text = re.sub(r'<style.*?>.*?</style>', ' ', text, flags=re.DOTALL|re.IGNORECASE)
-        
-        # Remove HTML tags
-        text = re.sub(r'<[^>]+>', ' ', text)
-        
-        # Handle HTML entities
-        text = text.replace('&nbsp;', ' ')
-        text = text.replace('&lt;', '<')
-        text = text.replace('&gt;', '>')
-        text = text.replace('&amp;', '&')
-        text = text.replace('&quot;', '"')
-        
-        # Remove excess whitespace
-        text = re.sub(r'\s+', ' ', text)
-        
-        result = text.strip()
-        output_length = len(result)
-        logger.debug(f"HTML stripped: removed {input_length - output_length} chars ({(input_length - output_length) / max(1, input_length) * 100:.1f}%)")
-        
-        return result
-    
-    def chunk(self, text: str, recursive: bool = False, depth: int = 0) -> List[str]:
-        """
-        Split text into chunks with optional recursive chunking for large sections.
-        
-        Args:
-            text: The text to chunk
-            recursive: Whether to recursively chunk large sections
-            depth: Current recursion depth (used internally)
-            
-        Returns:
-            List of text chunks, limited to max_chunks
-        """
-        if not text: # Handle None or empty string
-            logger.debug("Input text is empty or None, returning empty chunk list.")
-            return []
-            
-        # First, ensure all HTML is stripped
-        original_length = len(text)
-        text = self._strip_html(text)
-        stripped_length = len(text)
-        
-        if original_length > stripped_length:
-            logger.debug(f"Stripped HTML: removed {original_length - stripped_length} chars ({(original_length - stripped_length) / max(1, original_length) * 100:.1f}%)")
-        
-        # If text is smaller than min size, return as is (if not empty)
-        if len(text) < self.min_chunk_size:
-            logger.debug(f"Input text length ({len(text)}) is below min_chunk_size ({self.min_chunk_size}). Returning as single chunk.")
-            return [text]
-        
-        # Simple case: text fits in a single chunk
-        if len(text) <= self.chunk_size:
-            logger.debug(f"Input text length ({len(text)}) fits within chunk_size ({self.chunk_size}). Returning as single chunk.")
-            return [text]
-        
-        try:
-            # Try splitting by natural boundaries in decreasing order of preference
-            logger.debug("Attempting to split by headings...")
-            chunks = self._split_by_headings(text)
-            
-            if not chunks or (len(chunks) == 1 and chunks[0] == text):
-                logger.debug("Heading split ineffective, attempting to split by paragraphs...")
-                chunks = self._split_by_paragraphs(text)
-            
-            if not chunks or (len(chunks) == 1 and chunks[0] == text):
-                logger.debug("Paragraph split ineffective, attempting to split by sentences...")
-                chunks = self._split_by_sentences(text)
-            
-            if not chunks or (len(chunks) == 1 and chunks[0] == text):
-                logger.debug("Sentence split ineffective, falling back to character split...")
-                chunks = self._split_by_chars(text)
-            
-            # If recursive and we have large chunks, process them further
-            if recursive and depth < 3: # Slightly increased max depth
-                logger.debug(f"Recursively chunking {len(chunks)} initial chunks at depth {depth}.")
-                result_chunks = []
-                for chunk in chunks:
-                    if len(chunk) > self.chunk_size:
-                        # Recursively chunk large sections
-                        result_chunks.extend(self.chunk(chunk, recursive=True, depth=depth+1))
-                    elif len(chunk) >= self.min_chunk_size:
-                        result_chunks.append(chunk)
+        # Prepare recursive splitter for sections that are too large
+        recursive_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size, 
+            chunk_overlap=chunk_overlap,
+            length_function=len,
+            is_separator_regex=False,
+            separators=["\n\n", "\n", ". ", "? ", "! ", " ", ""] # Common separators
+        )
+
+        # Process each section from the header split
+        for section_doc in md_header_splits:
+            section_text = section_doc.page_content
+            # Combine original metadata with any metadata from the header split
+            combined_metadata = metadata.copy()
+            combined_metadata.update(section_doc.metadata)
+
+            if len(section_text) <= chunk_size and len(section_text) >= min_chunk_size:
+                # Section is within size limits, add it directly
+                final_chunks.append(Document(page_content=section_text, metadata=combined_metadata))
+            elif len(section_text) > chunk_size:
+                # Section is too large, split it further recursively
+                logger.debug(f"Recursively splitting section (length {len(section_text)} > {chunk_size}) starting with: '{section_text[:80]}...'")
+                recursive_splits = recursive_splitter.split_text(section_text)
+                for split_content in recursive_splits:
+                    if len(split_content) >= min_chunk_size:
+                        # Create a Document for each valid recursive split, retaining combined metadata
+                        final_chunks.append(Document(page_content=split_content, metadata=combined_metadata.copy()))
                     else:
-                        logger.debug(f"Skipping recursive chunk result below min_chunk_size ({len(chunk)} chars).")
-                logger.debug(f"Finished recursive chunking at depth {depth}. Total chunks: {len(result_chunks)}.")
-                chunks = result_chunks
-            else:
-                # Filter out chunks below min size even if not recursive
-                chunks = [c for c in chunks if len(c) >= self.min_chunk_size]
-                if len(chunks) < len(chunks):
-                    logger.debug(f"Filtered chunks below min_chunk_size after splitting.")
+                        logger.debug(f"Discarding recursive split result below min_chunk_size ({len(split_content)} chars).")
+            else: # len(section_text) < min_chunk_size
+                 logger.debug(f"Discarding header split section below min_chunk_size ({len(section_text)} chars).")
+            
+        logger.debug(f"Finished chunking document. Total valid chunks: {len(final_chunks)}.")
+        return final_chunks
 
-            # Enforce max_chunks limit if needed
-            if len(chunks) > self.max_chunks:
-                logger.warning(f"Chunking produced {len(chunks)} chunks, exceeding max_chunks limit of {self.max_chunks}. "
-                              f"Truncating to {self.max_chunks} chunks.")
-                chunks = chunks[:self.max_chunks]
+    except Exception as e:
+        logger.error(f"Error during LangChain chunking process: {e}", exc_info=True)
+        raise ChunkingError(f"An unexpected error occurred during chunking: {e}") from e
+
+def chunk_and_label(
+    documents: List[Dict[str, Any]],
+    chunk_size: int = 2048,
+    chunk_overlap: int = 100,
+    min_chunk_size: int = 256,
+    max_chunks: Optional[int] = 1000,
+) -> List[Dict[str, Any]]:
+    """
+    Processes a list of document dictionaries, chunks each using chunk_document, 
+    and returns a list of chunk dictionaries suitable for downstream processing.
+
+    Args:
+        documents: List of document dictionaries. Each must contain 'content' (str) 
+                   and may contain other metadata (e.g., 'title', 'link').
+        chunk_size: Target maximum size for each chunk (passed to chunk_document).
+        chunk_overlap: Character overlap between chunks (passed to chunk_document).
+        min_chunk_size: Minimum character length for chunks (passed to chunk_document).
+        max_chunks: Optional maximum total number of chunks to return across all documents.
+
+    Returns:
+        List of chunk dictionaries. Each dictionary contains the original metadata 
+        plus 'content' (the chunk text), 'chunk_id', and 'is_chunk'.
+        Returns an empty list if input is empty or contains no processable documents.
+
+    Raises:
+        ValueError: If input `documents` is not a list.
+        ChunkingError: Propagated from chunk_document if critical errors occur.
+    """
+    if not isinstance(documents, list):
+        raise ValueError("Input documents must be a list of dictionaries.")
+    if not documents:
+        logger.info("Received empty documents list, returning empty results.")
+        return []
+
+    all_chunked_dicts = []
+    total_chunks_generated = 0
+
+    for doc_idx, doc_dict in enumerate(documents):
+        
+        # Check max_chunks limit before processing the next document
+        if max_chunks is not None and total_chunks_generated >= max_chunks:
+            logger.warning(f"Reached max_chunks limit ({max_chunks}). Skipping remaining {len(documents) - doc_idx} documents.")
+            break
+             
+        if not isinstance(doc_dict, dict):
+            logger.warning(f"Skipping item at index {doc_idx} in documents list: not a dictionary.")
+            continue
+            
+        content = doc_dict.get('content')
+        if not content or not isinstance(content, str):
+            logger.warning(f"Skipping document index {doc_idx}: missing, empty, or invalid 'content' field.")
+            continue
+
+        # Prepare metadata for chunking, exclude original full content
+        metadata = {k: v for k, v in doc_dict.items() if k != 'content'}
+        # Use ID or index for logging/tracking
+        doc_id_info = metadata.get('id', f'doc{doc_idx}') 
+
+        try:
+            logger.info(f"Chunking document index {doc_idx} ('{doc_id_info}')...")
+            # Call the refactored chunking function which returns List[Document]
+            langchain_chunks: List[Document] = chunk_document(
+                doc_content=content, 
+                metadata=metadata, 
+                chunk_size=chunk_size, 
+                chunk_overlap=chunk_overlap,
+                min_chunk_size=min_chunk_size
+            )
+            
+            doc_chunks_added = 0
+            for chunk_idx, lc_chunk in enumerate(langchain_chunks):
+                # Check max_chunks limit before adding each chunk
+                if max_chunks is not None and total_chunks_generated >= max_chunks:
+                     logger.warning(f"Reached max_chunks limit ({max_chunks}) while processing chunks for document '{doc_id_info}'. Truncating further chunks from this document.")
+                     break # Stop adding chunks from this doc
+                     
+                # Convert LangChain Document back to dictionary format expected by agent
+                chunk_dict = lc_chunk.metadata.copy() # Start with metadata
+                chunk_dict['content'] = lc_chunk.page_content
+                chunk_dict['chunk_id'] = f"{doc_idx}-{chunk_idx}" # Assign unique chunk ID
+                chunk_dict['is_chunk'] = True # Label as a chunk
+                all_chunked_dicts.append(chunk_dict)
+                total_chunks_generated += 1
+                doc_chunks_added += 1
                 
-            logger.debug(f"Splitting finished. Total chunks: {len(chunks)}.")
-            return chunks
+            logger.info(f"Document '{doc_id_info}' processed into {doc_chunks_added} valid chunks.")
 
-        except re.error as e:
-            logger.error(f"Regex error during chunking: {e}", exc_info=True)
-            raise ChunkingError(f"Regex error occurred during text splitting: {e}") from e
+        except ChunkingError as e:
+            # Log specific chunking errors but allow processing to continue
+            logger.error(f"Failed to chunk document index {doc_idx} ('{doc_id_info}'): {e}", exc_info=False)
         except Exception as e:
-            logger.error(f"Unexpected error during chunking process: {e}", exc_info=True)
-            raise ChunkingError(f"An unexpected error occurred during chunking: {e}") from e
-    
-    def _split_by_headings(self, text: str) -> List[str]:
-        """Split text at heading boundaries (markdown or HTML headings)."""
-        # Regex to find headings, ensuring they are preceded by a newline or start of string
-        heading_pattern = r'(?:^|\r?\n)(#{1,6}\s+.+|<h[1-6]>.*?</h[1-6]>)'
-        try:
-            matches = list(re.finditer(heading_pattern, text, re.IGNORECASE))
-        except re.error as e:
-            logger.error(f"Regex error finding headings: {e}")
-            raise # Re-raise to be caught by the main chunk method
-
-        if len(matches) <= 1:
-            logger.debug("Found <= 1 heading match, cannot split by headings.")
-            return [] # Return empty list, not list containing original text
-
-        chunks = []
-        start_index = 0
-        for match in matches:
-            # Chunk before the heading
-            chunk = text[start_index:match.start()].strip()
-            if chunk and len(chunk) >= self.min_chunk_size:
-                chunks.append(chunk)
-            # Update start index to the beginning of the heading for the next potential chunk
-            start_index = match.start()
-        
-        # Add the final chunk (from the last heading to the end)
-        final_chunk = text[start_index:].strip()
-        if final_chunk and len(final_chunk) >= self.min_chunk_size:
-            chunks.append(final_chunk)
-
-        logger.debug(f"Split by headings resulted in {len(chunks)} potential chunks.")
-        return chunks
-    
-    def _split_by_paragraphs(self, text: str) -> List[str]:
-        """Split text at paragraph boundaries."""
-        try:
-            paragraphs = re.split(r'(\r?\n){2,}', text)
-        except re.error as e:
-            logger.error(f"Regex error splitting paragraphs: {e}")
-            raise
-
-        chunks = []
-        current_chunk = ""
-        
-        for p in paragraphs:
-            p_stripped = p.strip()
-            if not p_stripped:
-                continue
-                
-            if len(current_chunk) + len(p_stripped) + 2 > self.chunk_size: # +2 for newline chars
-                if len(current_chunk) >= self.min_chunk_size:
-                    chunks.append(current_chunk)
-                current_chunk = p_stripped # Start new chunk
-            else:
-                # Add paragraph to current chunk
-                if current_chunk:
-                    current_chunk += "\n\n" + p_stripped
-                else:
-                    current_chunk = p_stripped
-        
-        # Add the last chunk if it's valid
-        if current_chunk and len(current_chunk) >= self.min_chunk_size:
-            chunks.append(current_chunk)
-
-        logger.debug(f"Split by paragraphs resulted in {len(chunks)} potential chunks.")
-        return chunks
-    
-    def _split_by_sentences(self, text: str) -> List[str]:
-        """Split text at sentence boundaries."""
-        # Improved sentence splitting using lookbehind for punctuation followed by space/newline
-        try:
-            sentences = re.split(r'(?<=[.?!])(\s+|\r?\n)', text)
-        except re.error as e:
-            logger.error(f"Regex error splitting sentences: {e}")
-            raise
-
-        chunks = []
-        current_chunk = ""
-        current_sentence_parts = []
-        
-        for part in sentences:
-            if not part or part.isspace(): # Skip empty/whitespace parts from split
-                continue
-            current_sentence_parts.append(part)
-            sentence = "".join(current_sentence_parts).strip()
-
-            # If sentence ends with punctuation, process it
-            if sentence.endswith(tuple('.?!')):
-                if current_chunk and len(current_chunk) + len(sentence) + 1 > self.chunk_size: # +1 for space
-                    if len(current_chunk) >= self.min_chunk_size:
-                        chunks.append(current_chunk)
-                    current_chunk = sentence
-                else:
-                    if current_chunk:
-                        current_chunk += " " + sentence
-                    else:
-                        current_chunk = sentence
-                current_sentence_parts = [] # Reset for next sentence
-            # Else, keep accumulating parts (e.g., if split occurred mid-sentence)
-
-        # Add remaining parts as the last sentence/chunk
-        last_sentence = "".join(current_sentence_parts).strip()
-        if last_sentence:
-            if current_chunk and len(current_chunk) + len(last_sentence) + 1 <= self.chunk_size:
-                current_chunk += " " + last_sentence
-            elif len(last_sentence) >= self.min_chunk_size:
-                if current_chunk and len(current_chunk) >= self.min_chunk_size:
-                    chunks.append(current_chunk)
-                current_chunk = last_sentence # Assign last sentence as new chunk
-            # else: last part is too short, gets merged or dropped depending on current_chunk state
-
-        if current_chunk and len(current_chunk) >= self.min_chunk_size:
-            chunks.append(current_chunk)
-
-        logger.debug(f"Split by sentences resulted in {len(chunks)} potential chunks.")
-        return chunks
-    
-    def _split_by_chars(self, text: str) -> List[str]:
-        """Fall back to simple character-based chunking with overlap."""
-        chunks = []
-        text_len = len(text)
-        start_pos = 0
-        while start_pos < text_len:
-            end_pos = min(start_pos + self.chunk_size, text_len)
-
-            # Try to backtrack to the nearest space if not at the end
-            if end_pos < text_len:
-                last_space = text.rfind(' ', start_pos, end_pos)
-                # Only backtrack if it doesn't make the chunk too small and space exists
-                if last_space > start_pos and end_pos - last_space < self.chunk_size - self.min_chunk_size:
-                    end_pos = last_space + 1 # Include the space for potential sentence start
+            # Catch unexpected errors during the processing of a single document
+            logger.error(f"Unexpected error processing document index {doc_idx} ('{doc_id_info}'): {e}", exc_info=True)
             
-            chunk = text[start_pos:end_pos].strip()
-            if chunk and len(chunk) >= self.min_chunk_size:
-                chunks.append(chunk)
-            
-            # Move start position for the next chunk, considering overlap
-            next_start = start_pos + self.chunk_size - self.chunk_overlap
-            # Ensure progress is made
-            if next_start <= start_pos:
-                next_start = start_pos + 1 
-            start_pos = next_start
-            # Break if start_pos exceeds length (handles edge cases)
-            if start_pos >= text_len:
-                break
-
-        logger.debug(f"Split by characters resulted in {len(chunks)} chunks.")
-        return chunks
-    
-    def chunk_and_label(self, documents: List[Dict[str, Any]], sequential: bool = False) -> List[Dict[str, Any]]:
-        """
-        Process a list of documents, chunking each and preserving metadata.
+    logger.info(f"Finished processing {len(documents)} documents. Generated {total_chunks_generated} total chunks.")
+    # Apply final max_chunks limit just in case concurrent processing exceeds slightly (though less likely now)
+    if max_chunks is not None and len(all_chunked_dicts) > max_chunks:
+        logger.warning(f"Final chunk list ({len(all_chunked_dicts)}) exceeds max_chunks ({max_chunks}). Truncating final list.")
+        all_chunked_dicts = all_chunked_dicts[:max_chunks]
         
-        Args:
-            documents: List of document dictionaries, expected to have a 'content' field.
-            sequential: If True, process documents sequentially to avoid rate limits
-            
-        Returns:
-            List of chunk dictionaries with original metadata plus chunk_id.
-            Returns an empty list if input is empty or documents lack 'content'.
-            The total number of chunks will not exceed max_chunks.
+    return all_chunked_dicts
 
-        Raises:
-            ChunkingError: If chunking fails for any document.
-            ValueError: If input `documents` is not a list.
-        """
-        if not isinstance(documents, list):
-            raise ValueError("Input documents must be a list of dictionaries.")
-        if not documents:
-            return []
-
-        chunked_docs = []
-        total_chunks = 0
-        max_chunks_reached = False
-        
-        for doc_idx, doc in enumerate(documents):
-            if max_chunks_reached:
-                logger.warning(f"Max chunks limit ({self.max_chunks}) reached. Skipping processing of remaining documents.")
-                break
-                
-            if not isinstance(doc, dict):
-                logger.warning(f"Skipping item at index {doc_idx} in documents list because it is not a dictionary.")
-                continue
-            
-            content = doc.get('content')
-            if content is None:
-                logger.warning(f"Skipping document index {doc_idx} because it lacks a 'content' field.")
-                continue
-            if not isinstance(content, str):
-                logger.warning(f"Skipping document index {doc_idx} because 'content' field is not a string (type: {type(content).__name__}).")
-                continue
-
-            doc_id_info = doc.get('id', f'doc{doc_idx}') # Use ID if available, else index
-            try:
-                chunks = self.chunk(content, recursive=True)
-                
-                # Check if adding these chunks would exceed max_chunks
-                remaining_capacity = self.max_chunks - total_chunks
-                if len(chunks) > remaining_capacity:
-                    logger.warning(f"Document '{doc_id_info}' would produce {len(chunks)} chunks, but only {remaining_capacity} "
-                                 f"more chunks allowed before reaching max_chunks limit of {self.max_chunks}. Truncating.")
-                    chunks = chunks[:remaining_capacity]
-                    max_chunks_reached = True
-                
-                logger.debug(f"Chunked document '{doc_id_info}' into {len(chunks)} chunks.")
-                total_chunks += len(chunks)
-
-                for chunk_idx, chunk_text in enumerate(chunks):
-                    chunk_doc = doc.copy() # Shallow copy metadata
-                    chunk_doc['content'] = chunk_text
-                    chunk_doc['chunk_id'] = f"{doc_idx}-{chunk_idx}" # Simple chunk ID
-                    chunk_doc['is_chunk'] = True
-                    chunked_docs.append(chunk_doc)
-                    
-                if max_chunks_reached:
-                    logger.warning(f"Max chunks limit of {self.max_chunks} reached after processing document '{doc_id_info}'.")
-                    break
-                    
-            except ChunkingError as e:
-                logger.error(f"Failed to chunk document index {doc_idx} ('{doc_id_info}'): {e}")
-                # Propagate the error - failure to chunk one doc should fail the whole batch?
-                # Or collect errors and return partial results? Raising for now.
-                raise ChunkingError(f"Failed to process document {doc_idx}: {e}") from e
-            except Exception as e:
-                # Catch unexpected errors during labeling/copying
-                logger.error(f"Unexpected error processing document index {doc_idx} ('{doc_id_info}') after chunking: {e}", exc_info=True)
-                raise ChunkingError(f"Unexpected error processing document {doc_idx}: {e}") from e
-
-        logger.info(f"Finished chunking and labeling {len(documents)} documents into {total_chunks} total chunks.")
-        return chunked_docs 
+# --- Removed Old Chunker Class --- 

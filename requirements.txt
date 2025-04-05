@@ -20,15 +20,8 @@ httpx>=0.24.0 # Used for downloading PDFs and potentially by Crawl4AI
 # Web Scraping & Related
 crawl4ai[playwright]>=0.4.0 # Use Playwright backend
 wikipedia-api>=0.6.0
-# pymupdf4llm>=0.0.15 # Removed
 markitdown[pdf]>=0.1.1 # Use MarkItDown for PDF conversion
-# fasttext>=0.9.2 # Removed (Quality filtering disabled)
-# huggingface-hub>=0.15.0 # Removed (Quality filtering disabled)
-# beautifulsoup4>=4.11.0 # Removed, replaced by crawl4ai markdown/special handlers
-# lxml>=0.0.0 # Removed
+langchain-text-splitters
 
 # Reranking
-together # Keep if used by other services
-
-# Removed unused dependencies
-# torch == 2.5.1
+together

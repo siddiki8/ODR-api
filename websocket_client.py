@@ -16,10 +16,10 @@ WEBSOCKET_URL = "ws://localhost:8000/ws/research"
 RESEARCH_PAYLOAD = {
     "query": "What are the latest advancements in quantum computing?",
     # Optional: Add other ResearchRequest fields here if needed for testing
+    # e.g., max_search_tasks: 5, llm_provider: 'google'
     # "planner_llm_config": null,
     # "summarizer_llm_config": null,
     # "writer_llm_config": null,
-    # "scraper_strategies": null
 }
 
 async def run_research_client():

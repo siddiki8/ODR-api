@@ -1,18 +1,21 @@
 """
-Service for scraping web content using Crawl4AI, specialized handlers, and quality filtering.
+Service for scraping web content using Crawl4AI and specialized handlers.
+
+Provides a unified interface (`WebScraper`) to extract content from various URLs,
+including general web pages, Wikipedia pages, and PDFs (direct links or downloaded).
 """
 
 import asyncio
-# import os # Can be removed if load_dotenv handles API keys sufficiently elsewhere
-import re
 import logging
-from dataclasses import dataclass
-from typing import Dict, List, Optional # Removed Tuple, Union unless needed by scrape_many/scrape
-from urllib.parse import urlparse, urljoin
+import os # Needed for path operations with downloaded files
+# Removed unused: import re
+# Removed unused dataclass: from dataclasses import dataclass
+from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 # External Dependencies
-import httpx # Potentially remove if only used in pdf.py
-from dotenv import load_dotenv # Keep if OPENROUTER_API_KEY or other envs needed here
+# Removed unused: import httpx
+# Removed unused: from dotenv import load_dotenv
 
 # Crawl4AI Imports
 from crawl4ai import (
@@ -20,84 +23,112 @@ from crawl4ai import (
     BrowserConfig,
     CrawlerRunConfig,
     CacheMode,
-    MarkdownGenerationResult # Import the specific result type
+    MarkdownGenerationResult,
+    CrawlResult # Import CrawlResult for type hinting
 )
 
-# Import configuration
+# Import configuration and schemas
 from ..core.config import AppSettings
+from ..core.schemas import ExtractionResult # Import from schemas
 
 # Import custom exceptions
 from ..core.exceptions import ScrapingError, ConfigurationError
 
-# Import local modules
-from .special_scrapers import wikipedia, pdf
-# from . import quality_filter # Removed quality filter import
+# Import local modules for specialized scraping
+from .scraping_utils import pdf, wikipedia
 
 logger = logging.getLogger(__name__)
 
-# Ensure environment variables are loaded if needed (e.g., for API keys used indirectly)
-load_dotenv()
+# Removed load_dotenv() call
 
-# --- Dataclass for Result --- #
-@dataclass
-class ExtractionResult:
-    """Holds the results of a scraping operation."""
-    name: str # Source: 'wikipedia', 'pdf', 'crawl4ai_markdown'
-    content: Optional[str] = None
-    raw_markdown_length: Optional[int] = None # Now represents raw extracted length
+# --- Removed local ExtractionResult dataclass --- #
 
 # --- WebScraper Class --- #
 class WebScraper:
-    """Coordinates web scraping using specialized handlers or Crawl4AI."""
+    """
+    Coordinates web scraping using specialized handlers (Wikipedia, PDF)
+    or the general-purpose Crawl4AI library.
+
+    Uses AppSettings for configuration (PDF saving, size limits, etc.).
+    Can handle directly linked PDFs and PDFs downloaded via Crawl4AI.
+    """
 
     def __init__(
         self,
-        settings: AppSettings, # Add AppSettings dependency
-        debug: bool = False, # Keep debug separate for now
-        # min_quality_score: float = 0.2, # Removed min_quality_score
+        settings: AppSettings,
+        debug: bool = False,
         browser_config: Optional[BrowserConfig] = None
     ):
         """Initializes the WebScraper.
 
         Args:
             settings: The application settings instance.
-            debug: Enable debug logging.
-            browser_config: Optional custom BrowserConfig for Crawl4AI.
+            debug: If True, enables verbose logging for Crawl4AI browser operations.
+            browser_config: Optional custom BrowserConfig for Crawl4AI. If provided, 
+                            ensure it's configured for downloads if needed.
         """
         self.settings = settings
         self.debug = debug
-        # self.min_quality_score = min_quality_score # Removed
 
-        self.browser_config = browser_config or BrowserConfig(
-            browser_type='chromium',
-            headless=True,
-            verbose=self.debug,
-        )
+        # Configure browser settings for Crawl4AI
+        # Enable downloads by default using settings
+        default_download_path = os.path.join(settings.scraper_pdf_save_dir, ".crawl4ai_dl")
+        os.makedirs(default_download_path, exist_ok=True) # Ensure dir exists
+        
+        if browser_config:
+            # If user provides a config, use it but warn if downloads are off
+            self.browser_config = browser_config
+            if not getattr(self.browser_config, 'accept_downloads', False):
+                 logger.warning("Custom BrowserConfig provided but accept_downloads is not True. "
+                                "Crawl4AI may not download linked PDFs.")
+        else:
+            # Default config: enable downloads, use path from settings
+            self.browser_config = BrowserConfig(
+                browser_type='chromium',
+                headless=True,
+                verbose=self.debug,
+                accept_downloads=True, # Enable downloads
+                downloads_path=default_download_path # Specify download location
+            )
 
         logger.info(
             f"WebScraper initialized. Debug: {self.debug}, "
-            f"Browser Type: {self.browser_config.browser_type}"
-            # Removed quality score from log
+            f"Browser Type: {self.browser_config.browser_type}, "
+            f"Accept Downloads: {getattr(self.browser_config, 'accept_downloads', False)}, "
+            f"Downloads Path: {getattr(self.browser_config, 'downloads_path', 'Default')}"
         )
 
-    async def scrape(self, url: str) -> ExtractionResult: # Removed pdf args
-        """Scrapes content from a URL, dispatching to specific handlers or using Crawl4AI.
-           Uses settings for PDF handling (download, path, size limit).
+    async def scrape(self, url: str) -> ExtractionResult:
+        """
+        Scrapes content from a single URL.
+
+        Handles direct PDF links, Wikipedia pages, and general web pages.
+        For general pages, it uses Crawl4AI, checks if a PDF was downloaded,
+        and processes either the downloaded PDF or the extracted Markdown.
+
+        Args:
+            url: The URL to scrape.
+
+        Returns:
+            An ExtractionResult Pydantic model containing the content and source name.
+
+        Raises:
+            ValueError: If the URL is invalid.
+            ScrapingError: If extraction fails for any reason.
+            ConfigurationError: If required configuration is missing.
         """
         if not url or not urlparse(url).scheme in ['http', 'https']:
             raise ValueError(f"Invalid URL provided for scraping: {url}")
 
-        # Get PDF settings from AppSettings
-        download_pdfs = self.settings.scraper_download_pdfs
-        pdf_save_dir = self.settings.scraper_pdf_save_dir
-        max_pdf_size_bytes = self.settings.scraper_max_pdf_size_mb * 1024 * 1024
-
         parsed_url_obj = urlparse(url)
         content: Optional[str] = None
-        extraction_source = "unknown" # To track origin for result
+        extraction_source = "unknown"
+        max_pdf_size_bytes = self.settings.scraper_max_pdf_size_mb * 1024 * 1024
 
         try:
             # --- URL Dispatching --- #
+
+            # 1. Wikipedia Handler
             if "wikipedia.org" in parsed_url_obj.netloc:
                 try:
                     logger.info(f"Dispatching to Wikipedia handler for: {url}")
@@ -111,145 +142,126 @@ class WebScraper:
                     logger.error(f"Unexpected error in Wikipedia handler for {url}: {e}", exc_info=True)
                     raise ScrapingError(f"Wikipedia extraction failed unexpectedly for {url}: {e}") from e
 
+            # 2. Direct PDF Handler
             elif url.lower().endswith('.pdf'):
                 try:
-                    logger.info(f"Dispatching to PDF handler for: {url}")
+                    logger.info(f"Dispatching to PDF handler for direct URL: {url}")
+                    download_pdfs = self.settings.scraper_download_pdfs # Keep original file?
+                    pdf_save_dir = self.settings.scraper_pdf_save_dir
+                    
                     content = await pdf.handle_pdf_url(url, download_pdfs, pdf_save_dir, max_pdf_size_bytes)
                     extraction_source = "pdf"
-                    logger.info(f"PDF handler successful for: {url}")
+                    logger.info(f"PDF handler successful for direct URL: {url}")
                 except ScrapingError as e:
-                    logger.error(f"PDF handling failed for {url}: {e}", exc_info=False)
+                    logger.error(f"PDF handling failed for direct URL {url}: {e}", exc_info=False)
                     raise
                 except Exception as e:
-                    logger.error(f"Unexpected error in PDF handler for {url}: {e}", exc_info=True)
-                    raise ScrapingError(f"PDF handling failed unexpectedly for {url}: {e}") from e
+                    logger.error(f"Unexpected error in PDF handler for direct URL {url}: {e}", exc_info=True)
+                    raise ScrapingError(f"PDF handling failed unexpectedly for direct URL {url}: {e}") from e
 
+            # 3. General Web Crawling with Crawl4AI
             else:
-                # --- General Web Crawling with Crawl4AI --- #
-                logger.info(f"Dispatching to Crawl4AI handler for: {url}")
-                initial_content_str: Optional[str] = None
-                crawl4ai_source = "unknown"
-                pdf_link_to_process: Optional[str] = None
-                crawl4ai_result = None # Initialize result object
-
+                logger.info(f"Dispatching to Crawl4AI handler for general URL: {url}")
+                crawl4ai_result: Optional[CrawlResult] = None
                 try:
-                    # --- Run Crawl4AI ---
                     run_config = CrawlerRunConfig(cache_mode=CacheMode.BYPASS)
-                    browser_cfg = self.browser_config
-                    async with AsyncWebCrawler(config=browser_cfg) as crawler:
+                    # Use browser config from __init__ (already configured for downloads)
+                    async with AsyncWebCrawler(config=self.browser_config) as crawler:
                         crawl4ai_result = await crawler.arun(url=url, config=run_config)
 
-                    # --- Process Crawl4AI Result (Get initial Markdown string) ---
-                    if hasattr(crawl4ai_result, 'success') and crawl4ai_result.success and hasattr(crawl4ai_result, 'markdown') and crawl4ai_result.markdown:
-                        md_result = crawl4ai_result.markdown
-                        if isinstance(md_result, MarkdownGenerationResult):
-                            if hasattr(md_result, 'raw_markdown') and isinstance(md_result.raw_markdown, str):
-                                initial_content_str = md_result.raw_markdown
-                                crawl4ai_source = "crawl4ai_markdown_obj"
-                        elif isinstance(md_result, str):
-                            initial_content_str = md_result
-                            crawl4ai_source = "crawl4ai_markdown_str"
-                        else: # Fallback using str()
-                            try: initial_content_str = str(md_result)
-                            except Exception: pass
-                            if isinstance(initial_content_str, str): crawl4ai_source = "crawl4ai_markdown_converted"
-                            else: initial_content_str = None
+                    # --- Check for Downloaded PDF --- 
+                    downloaded_pdf_path: Optional[str] = None
+                    if hasattr(crawl4ai_result, 'downloaded_files') and crawl4ai_result.downloaded_files:
+                        for file_path in crawl4ai_result.downloaded_files:
+                             # Check if a downloaded file looks like a PDF
+                             if isinstance(file_path, str) and file_path.lower().endswith('.pdf'):
+                                 if os.path.exists(file_path):
+                                     downloaded_pdf_path = file_path
+                                     logger.info(f"Crawl4AI downloaded a PDF file: {downloaded_pdf_path}")
+                                     break # Process the first valid PDF found
+                                 else:
+                                     logger.warning(f"Crawl4AI reported downloaded file, but path not found: {file_path}")
 
-                    # Check if initial markdown extraction succeeded
-                    if not isinstance(initial_content_str, str) or not initial_content_str.strip():
-                        error_msg = getattr(crawl4ai_result, 'error', 'Unknown error or no valid markdown extracted')
-                        raise ScrapingError(f"Crawl4AI failed to extract valid initial markdown for {url}: {error_msg}")
+                    # --- Process Downloaded PDF OR Extracted Markdown --- 
+                    if downloaded_pdf_path:
+                        logger.info(f"Processing downloaded PDF: {downloaded_pdf_path}")
+                        try:
+                            # Process the local file
+                            content = await pdf.handle_local_pdf_file(downloaded_pdf_path, max_pdf_size_bytes)
+                            extraction_source = "crawl4ai_downloaded_pdf"
+                            logger.info(f"Successfully processed downloaded PDF content from {downloaded_pdf_path}")
+                            # Optionally delete the downloaded file if download_pdfs setting is False?
+                            # if not self.settings.scraper_download_pdfs:
+                            #    try: os.remove(downloaded_pdf_path) 
+                            #    except OSError as rm_err: logger.warning(f"Could not delete downloaded PDF {downloaded_pdf_path}: {rm_err}")
+                        except Exception as pdf_err:
+                             logger.error(f"Failed to process downloaded PDF {downloaded_pdf_path}: {pdf_err}", exc_info=True)
+                             # Fallback to markdown? Or raise error? Raising error for now.
+                             raise ScrapingError(f"Failed processing downloaded PDF from {url}: {pdf_err}") from pdf_err
+                    else:
+                        # No PDF downloaded, process Markdown from Crawl4AI
+                        logger.info(f"No PDF downloaded by Crawl4AI for {url}, attempting to use extracted Markdown.")
+                        if hasattr(crawl4ai_result, 'success') and crawl4ai_result.success and hasattr(crawl4ai_result, 'markdown') and crawl4ai_result.markdown:
+                            md_result = crawl4ai_result.markdown
+                            if isinstance(md_result, MarkdownGenerationResult):
+                                if hasattr(md_result, 'raw_markdown') and isinstance(md_result.raw_markdown, str):
+                                    content = md_result.raw_markdown
+                                    extraction_source = "crawl4ai_markdown_obj"
+                            elif isinstance(md_result, str):
+                                content = md_result
+                                extraction_source = "crawl4ai_markdown_str"
+                            else:
+                                try: content = str(md_result)
+                                except Exception: pass
+                                if isinstance(content, str): extraction_source = "crawl4ai_markdown_converted"
+                                else: content = None
 
-                    logger.info(f"Crawl4AI initial success for {url} ({crawl4ai_source}), Length: {len(initial_content_str)}")
-                    logger.debug(f"Initial Markdown Snippet for {url}:\n{initial_content_str[:500]}...") # Shorter snippet
-
-                    # --- Find PDF link using crawl4ai_result.links ---
-                    if hasattr(crawl4ai_result, 'links') and isinstance(crawl4ai_result.links, dict):
-                         all_links = crawl4ai_result.links.get("internal", []) + crawl4ai_result.links.get("external", [])
-                         for link_info in all_links:
-                             href = link_info.get("href")
-                             if href and isinstance(href, str) and "/pdf/" in href.lower():
-                                 absolute_pdf_url = urljoin(url, href)
-                                 if absolute_pdf_url.lower().endswith(".pdf") or "/pdf/" in absolute_pdf_url.lower():
-                                     pdf_link_to_process = absolute_pdf_url
-                                     logger.info(f"Found potential PDF link via result.links: {pdf_link_to_process}")
-                                     break
+                        if not isinstance(content, str) or not content.strip():
+                            error_msg = getattr(crawl4ai_result, 'error', 'No valid markdown extracted and no PDF downloaded')
+                            logger.error(f"Crawl4AI failed to provide usable content for {url}: {error_msg}")
+                            raise ScrapingError(f"Crawl4AI failed for {url}: {error_msg}")
+                        
+                        logger.info(f"Using extracted Markdown ({extraction_source}) for {url}, Length: {len(content)}")
+                        logger.debug(f"Crawl4AI Markdown Snippet for {url}:\n{content[:500]}...")
 
                 except ScrapingError as e:
                     raise e # Re-raise known scraping errors
                 except Exception as e:
-                    logger.error(f"Error during initial Crawl4AI processing or link finding for {url}: {e}", exc_info=True)
-                    raise ScrapingError(f"Initial Crawl4AI processing/link finding failed for {url}: {e}") from e
+                    logger.error(f"Error during Crawl4AI processing or download check for {url}: {e}", exc_info=True)
+                    raise ScrapingError(f"Crawl4AI processing/download check failed for {url}: {e}") from e
 
-                # --- Process Linked PDF if Found --- #
-                final_content_str = initial_content_str # Start with initial markdown
-                final_source = crawl4ai_source
-
-                if pdf_link_to_process:
-                    logger.info(f"Attempting to fetch content from linked PDF: {pdf_link_to_process}")
-                    try:
-                        # Use settings for PDF handling here too
-                        pdf_content = await pdf.handle_pdf_url(pdf_link_to_process, download_pdfs, pdf_save_dir, max_pdf_size_bytes)
-                        if isinstance(pdf_content, str) and pdf_content.strip():
-                            logger.info(f"Successfully extracted content from linked PDF: {pdf_link_to_process}. Appending.")
-                            # Combine content
-                            final_content_str = f"{initial_content_str}\n\n<hr/>\n\n**Appended PDF Content ({pdf_link_to_process}):**\n\n{pdf_content}"
-                            final_source += "+appended_pdf"
-                        else:
-                            logger.warning(f"Extraction from linked PDF {pdf_link_to_process} yielded empty or non-string content. Not appending.")
-                    except Exception as pdf_err:
-                        logger.warning(f"Failed to process linked PDF {pdf_link_to_process}: {pdf_err}", exc_info=False)
-                else:
-                     logger.info(f"No suitable PDF link found via result.links for {url}.")
-
-                # --- Assign final verified string content --- #
-                content = final_content_str
-                extraction_source = final_source
-
-            # --- Final Verification & Return (Applies to all paths) --- #
-            if content is None: # Should only be reachable if Wiki/DirectPDF failed
-                logger.error(f"Content is None before returning for {url} (source: {extraction_source})")
+            # --- Final Verification & Return --- #
+            if content is None:
+                logger.error(f"Scraping resulted in None content unexpectedly for {url} (source: {extraction_source})")
                 raise ScrapingError(f"Extraction failed unexpectedly for {url} (content is None)")
-            if not isinstance(content, str): # Final safeguard
-                 logger.critical(f"CRITICAL: Content is not a string ({type(content)}) just before returning for {url}")
-                 raise ScrapingError(f"Invalid content type ({type(content)}) before return for {url}")
+            
+            if not isinstance(content, str):
+                 logger.critical(f"CRITICAL: Final content is not a string ({type(content)}) for {url}")
+                 raise ScrapingError(f"Invalid final content type ({type(content)}) for {url}")
 
-            if not content.strip(): # Handle empty strings from any source
+            if not content.strip():
                 logger.warning(f"Extraction resulted in empty or whitespace-only content for {url} (source: {extraction_source}). Returning empty result.")
                 return ExtractionResult(name=extraction_source, content="", raw_markdown_length=0)
 
-            # Return the final result (content is guaranteed non-empty string)
             return ExtractionResult(
                  name=extraction_source,
                  content=content,
                  raw_markdown_length=len(content)
             )
 
-        # Catch errors raised during dispatching/filtering
         except (ValueError, ScrapingError, ConfigurationError) as e:
              logger.error(f"Scraping failed for {url}: {type(e).__name__}: {e}", exc_info=False)
              raise
         except Exception as e:
-            logger.critical(f"Critical unexpected error during scrape for {url}: {e}", exc_info=True)
+            logger.critical(f"Critical unexpected error during scrape() for {url}: {e}", exc_info=True)
             raise ScrapingError(f"An unexpected error occurred while scraping {url}: {e}") from e
 
-
+    # --- scrape_many remains the same --- #
     async def scrape_many(
         self,
         urls: List[str],
-        # Removed pdf args, will be taken from self.settings
-        sequential: bool = True # Default to sequential processing
+        sequential: bool = True
     ) -> Dict[str, ExtractionResult]:
-        """Scrapes multiple URLs, handling errors individually.
-        
-        Args:
-            urls: List of URLs to scrape.
-            sequential: If True, scrape URLs one by one.
-            
-        Returns:
-            A dictionary mapping successfully scraped URLs to their ExtractionResult.
-            Failed URLs are logged but not included in the returned dict.
-        """
         if not urls:
             return {}
             

@@ -20,6 +20,87 @@ logger = logging.getLogger(__name__)
 # Pass enable_plugins directly
 md_converter = MarkItDown(enable_plugins=False)
 
+async def handle_local_pdf_file(
+    file_path: str,
+    max_size_bytes: Optional[int] = None
+) -> str:
+    """
+    Reads a local PDF file, checks its size, and extracts Markdown content using MarkItDown.
+
+    Args:
+        file_path: The path to the local PDF file.
+        max_size_bytes: Optional maximum size in bytes. If exceeded, extraction is skipped.
+
+    Returns:
+        The extracted Markdown content of the PDF, or an empty string if skipped or failed.
+
+    Raises:
+        FileNotFoundError: If the file_path does not exist.
+        ScrapingError: If parsing the PDF fails.
+    """
+    logger.info(f"Attempting to handle local PDF file with MarkItDown: {file_path}")
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Local PDF file not found: {file_path}")
+
+    # 1. Check PDF Size
+    try:
+        file_size = os.path.getsize(file_path)
+        if max_size_bytes is not None and file_size > max_size_bytes:
+            logger.warning(
+                f"Local PDF size ({file_size / 1024 / 1024:.2f} MB) exceeds limit "
+                f"({max_size_bytes / 1024 / 1024:.2f} MB). Skipping: {file_path}"
+            )
+            return "" # Skipped due to size
+        logger.debug(f"Local PDF size ({file_size / 1024 / 1024:.2f} MB) is within limit for {file_path}")
+    except OSError as e:
+         logger.error(f"Could not get size of local PDF file {file_path}: {e}")
+         raise ScrapingError(f"Failed to check size of local PDF {file_path}: {e}") from e
+
+    # 2. Read PDF bytes from local file
+    try:
+        with open(file_path, 'rb') as f:
+            pdf_bytes = f.read()
+        if not pdf_bytes:
+             logger.warning(f"Read empty file from local path: {file_path}")
+             return "" # Treat empty file as no content
+        logger.debug(f"Successfully read local PDF: {file_path} ({len(pdf_bytes)} bytes)")
+    except OSError as e:
+        logger.error(f"Failed to read local PDF file {file_path}: {e}")
+        raise ScrapingError(f"Failed to read local PDF {file_path}: {e}") from e
+    except Exception as e:
+         logger.error(f"Unexpected error reading local PDF file {file_path}: {e}", exc_info=True)
+         raise ScrapingError(f"Unexpected error reading local PDF {file_path}: {e}") from e
+
+    # 3. Extract Markdown using MarkItDown
+    try:
+        logger.debug(f"Starting PDF parsing with MarkItDown for local file: {file_path}")
+        pdf_stream = io.BytesIO(pdf_bytes)
+        loop = asyncio.get_running_loop()
+
+        # MarkItDown.convert might be synchronous, run in executor
+        result = await loop.run_in_executor(None, md_converter.convert, pdf_stream)
+        pdf_stream.close()
+
+        md_text: Optional[str] = None
+        if result and hasattr(result, 'text_content'):
+             md_text = result.text_content
+        elif result: 
+             logger.warning(f"MarkItDown conversion for {file_path} succeeded but returned no text_content. Result: {result}")
+        else:
+             logger.warning(f"MarkItDown conversion for {file_path} failed or returned None.")
+
+        if not md_text:
+            logger.warning(f"MarkItDown extracted no text content from local PDF: {file_path}")
+            return ""
+
+        logger.info(f"Successfully extracted Markdown using MarkItDown from local PDF: {file_path} (Length: {len(md_text)})")
+        return md_text
+
+    except Exception as e:
+        logger.error(f"MarkItDown failed to process local PDF stream from {file_path}: {e}", exc_info=True)
+        raise ScrapingError(f"Failed to extract Markdown from local PDF {file_path} using MarkItDown: {e}") from e
+
 async def handle_pdf_url(
     url: str, 
     download_pdfs: bool = False, 

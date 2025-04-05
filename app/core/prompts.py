@@ -11,7 +11,7 @@ _PLANNER_SYSTEM_PROMPT = \
 """
 You are an expert research assistant responsible for planning the steps needed to answer a complex user query.
 Your goal is to generate a structured plan containing:
-1.  A list of `search_tasks`: Define 1 to {max_search_tasks} specific search queries for a web search engine (like Google via Serper API) to gather the necessary information. Prioritize quality over quantity; only generate multiple queries if distinct angles are needed. For each task, specify the query string, the most appropriate Serper endpoint, the desired number of results (`num_results`, default 10), and a brief reasoning.
+1.  A list of `search_tasks`: Define 1 to {max_search_tasks} specific search queries for a web search engine (like Google via Serper API) to gather the necessary information. Generate distinct queries targeting different facets or sub-questions implied by the user's request. Prioritize quality over quantity; only generate multiple queries if distinct angles are truly needed. For each task, specify the query string, the most appropriate Serper endpoint, the desired number of results (`num_results`, default 10), and a brief reasoning.
 
 Available Serper endpoints and when to use them:
 - `/search`: General web search for broad information, recent events, and mainstream content (default choice)
@@ -19,6 +19,7 @@ Available Serper endpoints and when to use them:
 - `/news`: Recent news articles and current events (use for trending topics, recent developments, or time-sensitive information)
 
 2.  A detailed `writing_plan`: Outline the structure of the final report. This includes the overall goal, desired tone, specific sections with titles and guidance for each, and any additional directives for the writer.
+    - The `guidance` for each section should be actionable. Link it back to specific parts of the user query or specify the *type* of information required (e.g., 'Summarize arguments for X,' 'Detail methodology of Y,' 'Compare Z found in sources').
 
 Analyze the user's query carefully and devise a plan that will lead to a comprehensive and well-structured report.
 
@@ -68,8 +69,9 @@ def get_planner_prompt(user_query: str, max_search_tasks: int = 3) -> List[Dict[
 
 _SUMMARIZER_SYSTEM_PROMPT = \
 """
-You are an expert summarizer. Your task is to create a complete, factual summary of the provided text content. You don't have to be particularly concise. Information is the priority, but concisesness where possible helps save tokens. This summary is one of many that will be used to generate a powerful research report - so don't be afraid to include all the important information you can find.
-Focus specifically on extracting information relevant to answering the user's original research query, which will be used to generate a comprehensive report.
+You are an expert summarizer. Your task is to create a complete, factual summary of the provided text content.
+Prioritize extracting *all* key facts, arguments, and data relevant to the user's original research query. Aim for informational density; be thorough rather than brief, but avoid redundant phrasing where possible without sacrificing completeness.
+The summary is one of many that will be used to generate a comprehensive research report.
 Extract key facts, findings, arguments, and data points pertinent to the user's query topic.
 Maintain a neutral, objective tone.
 The summary should be dense with relevant information but easy to understand.
@@ -122,9 +124,9 @@ _WRITER_SYSTEM_PROMPT_BASE = \
 """
 You are an expert research report writer. Your goal is to synthesize information from provided source materials (summaries and relevant chunks) into a well-structured, coherent, and informative report.
 Follow the provided writing plan precisely, including the overall goal, tone, section structure, and specific guidance for each section.
-Integrate the information from the source materials naturally into the report narrative.
+Integrate the information from the source materials naturally into the report narrative. Synthesize information *across* different sources within sections where appropriate. Highlight agreements, discrepancies, or differing perspectives found in the materials, citing accordingly. If source materials present conflicting information, present both perspectives clearly, ensuring each is attributed to its source(s) via citation.
 
-**Crucially, you MUST cite your sources using the numerical markers provided for the *original source* (e.g., [1], [2]).** Source materials are grouped by their original source, and each original source has a unique citation number. Even if information comes from a specific chunk of a source, cite the main source number. 
+**Crucially, you MUST cite your sources using the numerical markers provided for the *original source* (e.g., [1], [2]).** Source materials are grouped by their original source, and each original source has a unique citation number. Even if information comes from a specific chunk of a source, cite the main source number.
 
 When citing:
 - Add the corresponding numerical citation marker immediately after the information (e.g., 'Quantum computing poses a threat [1].').
@@ -134,7 +136,7 @@ When citing:
 Maintain a logical flow and ensure the report directly addresses the original user query.
 **Do NOT generate a bibliography or reference list at the end; this will be added later.**
 
-If, while writing, you determine that you lack sufficient specific information on a crucial sub-topic required by the writing plan, you can request a specific web search. To do this, insert the exact tag `<search_request query="...">` at the point in the text where the information is needed. Replace "..." with the specific search query string that would find the missing information. Use this tag *only* if absolutely necessary to fulfill the writing plan requirements and *only once* per draft.
+If, while writing, you determine that you lack sufficient specific information on a crucial sub-topic required by the writing plan, you can request a specific web search. To do this, insert the exact tag `<search_request query="...">` at the point in the text where the information is needed. Replace "..." with the specific search query string that would find the missing information. Use this tag *sparingly*, only when fulfilling a core requirement of the writing plan is impossible without it, and *only once* per draft.
 """
 
 # For Initial Draft Generation
@@ -224,19 +226,19 @@ def format_summaries_for_prompt(source_materials: list[Dict[str, Any]]) -> str:
                 
     return "\n\n".join(formatted_output)
 
-def get_writer_initial_prompt(user_query: str, writing_plan: dict, source_summaries: list[dict[str, str]]) -> list[dict[str, str]]:
+def get_writer_initial_prompt(user_query: str, writing_plan: dict, source_materials: list[dict[str, Any]]) -> list[dict[str, str]]:
     """
     Generates the message list for the Writer LLM (initial draft).
 
     Args:
         user_query: The original user query.
         writing_plan: The JSON writing plan from the Planner.
-        source_summaries: List of dictionaries, each containing 'title', 'link', 'summary'.
+        source_materials: List of dictionaries, containing grouped summaries/chunks.
 
     Returns:
         A list of messages suitable for litellm.completion.
     """
-    formatted_summaries_str = format_summaries_for_prompt(source_summaries)
+    formatted_materials_str = format_summaries_for_prompt(source_materials)
     writing_plan_str = json.dumps(writing_plan, indent=2)
     
     return [
@@ -246,7 +248,7 @@ def get_writer_initial_prompt(user_query: str, writing_plan: dict, source_summar
             "content": _WRITER_USER_MESSAGE_TEMPLATE_INITIAL.format(
                 user_query=user_query,
                 writing_plan_json=writing_plan_str,
-                formatted_summaries=formatted_summaries_str
+                formatted_summaries=formatted_materials_str
             )
         }
     ]
@@ -352,80 +354,25 @@ def get_writer_refinement_prompt(
 format_summaries_for_prompt_template = format_summaries_for_prompt
 
 # --- Refiner Prompt --- 
+# REMOVED - This role is being consolidated into iterative calls to the Writer LLM
+# using get_writer_refinement_prompt but potentially with a different LLM config.
 
-_REFINER_SYSTEM_PROMPT = \
-"""
-You are an expert editor tasked with refining a research report draft.
-You have been provided with:
-1. The previous draft of the report.
-2. The specific search query that was performed to find additional information.
-3. New relevant information (potentially chunks or summaries) extracted from sources found by that search query.
+# _REFINER_SYSTEM_PROMPT = \
+# """
+# ... (removed content) ...
+# """
 
-Your goal is to integrate the *new relevant information* seamlessly into the *previous draft* to improve its completeness and accuracy, specifically addressing the gap identified by the search query.
-- Focus on incorporating the substance of the new information.
-- Maintain the existing structure, tone, and citation style of the draft.
-- **Ensure you handle citations correctly**: If the new information requires citations, determine if the source already exists in the draft (check previous citations) or if it's a new source requiring a new citation number (you may need context from the main writer process to assign the *correct* number, but indicate where a citation is needed).
-- Make the report flow naturally after incorporating the changes.
-- Output *only* the revised report draft.
-"""
+# _REFINER_USER_MESSAGE_TEMPLATE = \
+# """
+# ... (removed content) ...
+# """
 
-_REFINER_USER_MESSAGE_TEMPLATE = \
-"""
-Previous Draft:
-```
-{previous_draft}
-```
+# def get_refiner_prompt(
+#     previous_draft: str,
+#     search_query: str,
+#     new_info: list[Dict[str, Any]] # Updated type hint
+# ) -> list[dict[str, str]]:
+#    """Generates the message list for the Refiner LLM.""" 
+#     # ... (removed function body) ...
 
-We performed a search for: '{search_query}'
-
-Incorporate the following new information found from that search:
-{formatted_new_info}
-
----
-
-Please provide the revised report draft, integrating the new information logically and maintaining the original style and citations where possible.
-
-Revised Draft:
-"""
-
-def get_refiner_prompt(
-    previous_draft: str,
-    search_query: str,
-    new_info: list[Dict[str, Any]] # Updated type hint
-) -> list[dict[str, str]]:
-    """Generates the message list for the Refiner LLM."""
-    
-    # Format the new info (chunks) for the prompt
-    formatted_new_info_parts = []
-    if new_info:
-        for i, chunk_data in enumerate(new_info):
-            # Use temporary high citation numbers or just indicators for clarity
-            # The main citation logic relies on the writer seeing the full history
-            source_indicator = f"New Info [{i+1}]"
-            title = chunk_data.get('title', 'Untitled')
-            url = chunk_data.get('url', '#')
-            score = chunk_data.get('score')
-            content = chunk_data.get('chunk_content') or chunk_data.get('content')
-            
-            score_str = f" (Score: {score:.2f})" if score is not None else ""
-            
-            formatted_new_info_parts.append(f"{source_indicator}: {title}{score_str} ({url})" )
-            if content:
-                formatted_new_info_parts.append(f"  Content: {content}")
-            else:
-                formatted_new_info_parts.append("  Content: [Not Available]")
-        formatted_new_info = "\n\n".join(formatted_new_info_parts)
-    else:
-        formatted_new_info = "No new relevant information was found or processed for this query."
-
-    return [
-        {"role": "system", "content": _REFINER_SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": _REFINER_USER_MESSAGE_TEMPLATE.format(
-                previous_draft=previous_draft,
-                search_query=search_query,
-                formatted_new_info=formatted_new_info
-            )
-        }
-    ] 
+# --- End of File --- 

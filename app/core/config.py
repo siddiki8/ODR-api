@@ -3,7 +3,7 @@ from typing import Dict, Any, Optional, List, Literal
 import logging
 from pathlib import Path # Import Path
 
-from pydantic import BaseModel, Field, HttpUrl, SecretStr, field_validator, validator
+from pydantic import BaseModel, Field, HttpUrl, SecretStr, field_validator, validator, ConfigDict
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv, find_dotenv # Import find_dotenv
 
@@ -48,6 +48,8 @@ class LLMConfig(BaseModel):
     
     Defaults are provided, but typically overridden during agent initialization.
     """
+    model_config = ConfigDict(extra='ignore') # Add V2 config
+
     model: str = "gemini-pro"
     provider: Optional[Literal['google', 'openrouter']] = None
     api_key: Optional[SecretStr] = None
@@ -91,7 +93,7 @@ class AppSettings(BaseSettings):
     # Base LLMConfig objects; model name and API details are set later in the agent
     default_planner_llm: LLMConfig = LLMConfig(temperature=0.5)
     default_summarizer_llm: LLMConfig = LLMConfig(temperature=0.3)
-    default_writer_llm: LLMConfig = LLMConfig(temperature=0.7, max_tokens=100000)
+    default_writer_llm: LLMConfig = LLMConfig(temperature=0.7) #optionally - max_tokens=100000
 
     # --- Service Configurations ---
     reranker_model: str = Field(..., alias='RERANKER_MODEL', min_length=1, description="Model name for Together Reranker API")

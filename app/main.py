@@ -9,7 +9,8 @@ import asyncio # Keep asyncio for potential use elsewhere, though direct sleeps 
 from typing import Dict, Any, Optional # <-- Import Dict, Any, Optional
 
 # Import configuration, models, and the agent
-from .core.config import AppSettings, ApiKeys, ResearchRequest, ResearchResponse
+from .core.config import AppSettings, ApiKeys # Import only AppSettings and ApiKeys from config
+from .core.schemas import ResearchRequest, ResearchResponse # Import schemas from the correct file
 # Dependencies removed from config import to avoid circularity if handlers need them
 from .core.agent import DeepResearchAgent
 # Import custom exceptions

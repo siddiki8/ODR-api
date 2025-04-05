@@ -4,6 +4,9 @@ import asyncio
 import websockets
 import json
 import logging
+import os
+from datetime import datetime
+import re # For sanitizing filenames
 
 # Configure logging for the client
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -14,7 +17,7 @@ logger = logging.getLogger("WebSocketClient")
 WEBSOCKET_URL = "ws://localhost:8000/ws/research"
 # Sample research request payload
 RESEARCH_PAYLOAD = {
-    "query": "What are the latest advancements in quantum computing?",
+    "query": "Compare the environmental and economic sustainability of various carbon capture technologies (direct air capture, bioenergy with carbon capture, enhanced weathering, and ocean-based methods), analyzing their scalability, cost-effectiveness, and potential ecological impacts based on peer-reviewed literature.",
     # Optional: Add other ResearchRequest fields here if needed for testing
     # e.g., max_search_tasks: 5, llm_provider: 'google'
     # "planner_llm_config": null,
@@ -45,9 +48,33 @@ async def run_research_client():
                         logger.info(f"Received update: {message_data}")
                         # Optional: Check for the 'COMPLETE' step to potentially exit early
                         if message_data.get("step") == "COMPLETE" and message_data.get("status") == "END":
-                            logger.info("Received 'COMPLETE' message. Closing connection.")
-                            break
-                        elif message_data.get("step") == "ERROR" and message_data.get("status") == "ERROR":
+                            logger.info("Received 'COMPLETE' message. Processing final report...")
+                            # --- Save Final Report --- #
+                            try:
+                                report_content = message_data.get("details", {}).get("final_report")
+                                if report_content:
+                                    # Create a reports directory if it doesn't exist
+                                    output_dir = "./research_reports"
+                                    os.makedirs(output_dir, exist_ok=True)
+
+                                    # Sanitize query for filename
+                                    query_part = RESEARCH_PAYLOAD.get("query", "untitled")[:50] # Limit length
+                                    sanitized_query = re.sub(r'[^a-zA-Z0-9_\-]', '_', query_part).strip('_')
+                                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                    filename = f"{timestamp}_{sanitized_query}.md"
+                                    filepath = os.path.join(output_dir, filename)
+
+                                    with open(filepath, 'w', encoding='utf-8') as f:
+                                        f.write(report_content)
+                                    logger.info(f"Final report saved to: {filepath}")
+                                else:
+                                     logger.warning("'COMPLETE' message received, but no 'final_report' found in details.")
+                            except Exception as save_e:
+                                logger.error(f"Failed to save the final report: {save_e}", exc_info=True)
+                            # ------------------------- #
+                            break # Exit loop after processing COMPLETE
+                        elif message_data.get("step") == "ERROR": # Check for general ERROR step
+                             error_status = message_data.get("status", "ERROR") # e.g., ERROR, FATAL
                              logger.error(f"Received 'ERROR' message: {message_data.get('message', '')} Details: {message_data.get('details')}")
                              logger.warning("Closing connection due to server error.")
                              break

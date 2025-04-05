@@ -3,20 +3,22 @@ import logging # Import logging
 import json
 import re
 import asyncio
+import os # <-- Import os for file operations
 from collections import Counter
-from pydantic import ValidationError
+from pydantic import ValidationError, HttpUrl
+from datetime import datetime # <-- Import datetime for timestamp
 
 # --- Internal Imports (New Structure) ---
-from ..services.search import execute_batch_serper_search, SerperConfig, SearchResult
+from ..services.search import execute_batch_serper_search, SerperConfig
+from ..core.schemas import SearchResult, SearchTask
 from ..services.ranking import rerank_with_together_api
 from ..services.scraping import WebScraper, ExtractionResult
-from ..services.chunking import chunk_and_label 
+from ..services.chunking import chunk_and_label
 from .schemas import PlannerOutput, SourceSummary, SearchRequest, Chunk, TokenUsageCounter, UsageStatistics # Removed WritingPlan
 from .prompts import (
     get_planner_prompt,
     get_summarizer_prompt,
     get_writer_initial_prompt,
-    get_refiner_prompt,
     format_summaries_for_prompt as format_summaries_for_prompt_template,
     _WRITER_SYSTEM_PROMPT_BASE,
     get_writer_refinement_prompt
@@ -187,6 +189,7 @@ class DeepResearchAgent:
     async def _send_ws_update(self, step: str, status: str, message: str, details: Dict[str, Any] | None = None):
         """
         Sends status updates over the WebSocket connection if the callback is set.
+        Preprocesses details to ensure JSON serializability (e.g., converts HttpUrl to str).
         
         Args:
             step: The current step/phase of the research process (e.g., "PLANNING", "SEARCHING").
@@ -195,9 +198,25 @@ class DeepResearchAgent:
             details: Optional dictionary with additional structured data about the status.
         """
         if self.websocket_callback:
+            processed_details = {}
+            if details:
+                # Convert known non-serializable types
+                for key, value in details.items():
+                    if isinstance(value, HttpUrl):
+                        processed_details[key] = str(value)
+                    # Add checks for other non-serializable types if needed
+                    # elif isinstance(value, SomeOtherType):
+                    #    processed_details[key] = convert_to_serializable(value)
+                    else:
+                        processed_details[key] = value
+            else:
+                # Pass None if original details were None
+                processed_details = None 
+
             try:
                 self.logger.debug(f"WS Update: {step}/{status} - {message}")
-                await self.websocket_callback(step, status, message, details)
+                # Pass the processed details to the callback
+                await self.websocket_callback(step, status, message, processed_details)
             except Exception as e:
                 # Log error but don't crash agent if WS send fails
                 self.logger.error(f"Failed to send WebSocket update ({step}/{status}): {e}", exc_info=True)
@@ -327,7 +346,6 @@ class DeepResearchAgent:
             response, usage_info, cost_info = await call_litellm_acompletion(
                 messages=messages,
                 llm_config=self.planner_llm_config,
-                response_pydantic_model=PlannerOutput, 
                 num_retries=3,
                 logger_callback=self.logger
             )
@@ -606,6 +624,9 @@ class DeepResearchAgent:
             self.logger.info("Skipping chunking/reranking as no sources were designated.")
         
         await self._send_ws_update("PROCESSING", "END", f"Finished processing all initial sources ({len(all_processed_urls)} unique URLs).")
+        # --- Add Logging --- #
+        self.logger.info(f"Content Processing Result: {len(processed_summaries)} summaries, {len(processed_chunks)} relevant chunks obtained.")
+        # ----------------- #
         return processed_summaries, processed_chunks, all_processed_urls
         
     def _assemble_writer_context(self, processed_summaries: List[SourceSummary], processed_chunks: List[Chunk]) -> List[Dict[str, Any]]:
@@ -666,11 +687,15 @@ class DeepResearchAgent:
         self.logger.info("--- Phase 6: Initial Report Generation ---")
         await self._send_ws_update("WRITING", "START", "Generating initial report draft...")
         try:
+            self.logger.info("Preparing messages for initial writer LLM call...")
             writer_prompt_messages = get_writer_initial_prompt(
                 user_query=user_query,
                 writing_plan=planner_output.writing_plan.model_dump(),
                 source_materials=writer_context
             )
+
+            self.logger.info(f"Attempting to generate writer prompt with {len(writer_context)} context items.")
+
             await asyncio.sleep(1.0) # Delay
             response, usage, cost = await call_litellm_acompletion(
                 messages=writer_prompt_messages,
@@ -749,7 +774,15 @@ class DeepResearchAgent:
             new_search_results: List[SearchResult] = []
             try:
                 await self._send_ws_update("SEARCHING", "START", f"[Refinement {refinement_iteration}] Performing search...")
-                refinement_tasks = [{"query": search_request.query, "endpoint": "/search", "num_results": 10}]
+                # Instantiate SearchTask object instead of dict
+                refinement_tasks = [
+                    SearchTask(
+                        query=search_request.query, 
+                        endpoint="/search", # Defaulting to /search for refinement
+                        num_results=10, 
+                        reasoning=f"Refinement search iteration {refinement_iteration} based on writer request for '{search_request.query[:30]}...'" # Add required reasoning
+                    )
+                ]
                 batch_results = await execute_batch_serper_search(search_tasks=refinement_tasks, config=self.serper_config)
                 self.serper_queries_used += len(refinement_tasks)
                 parsed_results: List[SearchResult] = []
@@ -840,28 +873,17 @@ class DeepResearchAgent:
                 await self._send_ws_update("REFINING", "IN_PROGRESS", "Calling LLM to refine draft..." )
                 await asyncio.sleep(1.0) # Delay
                 
-                # Prepare args for get_writer_refinement_prompt
-                # We need the 'new_summaries' arg, but we have chunks. Adapt the prompt call.
-                # Let's pass the new chunks directly. The prompt template needs adjustment or we format here.
-                # TEMPORARY: Format new chunks similar to how get_refiner_prompt did for display
-                formatted_new_chunks_for_prompt = []
-                for chunk_dict in all_source_materials[-len(new_relevant_chunks):]: # Get newly added chunks
-                    context_marker = f"(New Info Item [{chunk_dict['rank']}])"
-                    title = chunk_dict.get('title', 'Untitled')
-                    link = chunk_dict.get('link', '#')
-                    score = chunk_dict.get('score')
-                    content = chunk_dict.get('content', 'No content.')
-                    score_str = f" (Score: {score:.2f})" if score is not None else ""
-                    formatted_new_chunks_for_prompt.append(f"{context_marker} Title: {title}{score_str} ({link})\nContent: {content}")
-                formatted_new_info_str = "\n\n".join(formatted_new_chunks_for_prompt)
-                
+                # Get the newly added context items (which are dicts)
+                new_context_items = all_source_materials[-len(new_relevant_chunks):]
+
                 # Generate messages using the WRITER refinement prompt
+                # Pass the list of dicts directly
                 refinement_messages = get_writer_refinement_prompt(
                     user_query=user_query,
                     writing_plan=planner_output.writing_plan.model_dump(), # Pass the original plan
                     previous_draft=draft_for_refinement_call,
                     refinement_topic=search_request.query, # Topic is the search query itself
-                    new_summaries=formatted_new_info_str, # Pass formatted new chunks here (prompt expects summaries)
+                    new_summaries=new_context_items, # Pass the list of new context item dicts
                     all_summaries=all_source_materials # Pass the FULL updated context list
                 )
                 
@@ -1007,7 +1029,8 @@ class DeepResearchAgent:
             
             await self._send_ws_update(final_status, final_ws_status, final_ws_message, {
                 "final_report_length": len(final_report),
-                "usage": usage_statistics.model_dump()  # Convert to dict for JSON serialization
+                "usage": usage_statistics.model_dump(),  # Convert to dict for JSON serialization
+                "final_report": final_report
             })
 
             return {
@@ -1063,22 +1086,34 @@ class DeepResearchAgent:
             await self._send_ws_update(stage, "IN_PROGRESS", f"{action_prefix}Summarizing content...", {"source_url": url, "action": "Summarizing"})
             self.logger.info(f"{action_prefix}Summarizing content for: {url}")
 
-            summarizer_prompt = get_summarizer_prompt(
+            summarizer_prompt_messages = get_summarizer_prompt(
                 user_query=query,
                 source_title=source.title or "Unknown Title",
                 source_link=url,
                 source_content=scraped_content # Pass the extracted string content
             )
-            messages = [{"role": "user", "content": summarizer_prompt}]
+            # Note: get_summarizer_prompt returns a list of dicts already
+            # messages = [{"role": "user", "content": summarizer_prompt}]
+            # Directly use the result from get_summarizer_prompt
+            messages = summarizer_prompt_messages 
 
             response, usage, cost = await call_litellm_acompletion(
                 messages=messages,
                 llm_config=self.summarizer_llm_config,
             )
+            
+            # Safely extract content with checks
+            summary_content = "" # Default to empty string
+            if response and response.choices and response.choices[0].message and hasattr(response.choices[0].message, 'content'):
+                summary_content = response.choices[0].message.content or ""
+            else:
+                 # Log a warning if the expected structure isn't found
+                 self.logger.warning(f"{action_prefix}LLM response structure unexpected or content missing for {url}. Response object keys: {list(response.__dict__.keys()) if response else 'None'}")
+                 # Depending on requirements, could raise an error or proceed with empty summary
 
-            summary_content = response.choices[0].message.content or ""
             if not summary_content.strip():
-                raise LLMError("Summarizer returned empty content.")
+                # Raise error only if content is empty after attempting access
+                raise LLMError("Summarizer returned empty content or failed to extract content from response.")
 
             # STEP 4: Log usage and update progress
             self._log_and_update_usage('summarizer', usage, cost)
@@ -1103,7 +1138,7 @@ class DeepResearchAgent:
             return None  # Indicate failure
         except Exception as e:
             error_msg = f"{action_prefix}Unexpected error processing {url}: {type(e).__name__}"
-            self.logger.error(error_msg, exc_info=False)
+            self.logger.error(error_msg, exc_info=True) # Log full traceback
             await self._send_ws_update(stage, "ERROR", f"{action_prefix}Unexpected error processing {url}", {"source_url": url, "error": type(e).__name__})
             return None  # Indicate failure
 
@@ -1218,59 +1253,63 @@ class DeepResearchAgent:
             return []
         except Exception as e:
             error_msg = f"{action_prefix}Unexpected error processing {url}: {type(e).__name__}"
-            self.logger.error(error_msg, exc_info=False)
+            self.logger.error(error_msg, exc_info=True) # Log full traceback
             await self._send_ws_update(stage, "ERROR", f"{action_prefix}Unexpected error processing {url}", {"source_url": url, "error": type(e).__name__})
             return []
 
     def _assemble_final_report(self, report_draft: str, writer_context_items: List[Dict[str, Any]]) -> str:
         """
-        Assembles the final report, adding a references section based on cited sources.
+        Assembles the final report, appending a list of all sources provided to the writer.
         
-        Removes any remaining <search_request> tags.
-        Finds citation markers [N] in the draft and matches them to the ranked context items.
+        Removes any remaining <search_request> tags from the draft.
+        Groups sources by unique link to avoid duplicates in the final list.
         
         Args:
-            report_draft: The drafted report text, possibly containing citation markers [N].
+            report_draft: The drafted report text generated by the LLM.
             writer_context_items: A list of dictionaries containing assembled context items
-                                (converted from SourceSummary and Chunk objects).
+                                (converted from SourceSummary and Chunk objects) that were
+                                provided to the writer.
         
         Returns:
-            The final report string with references appended (if any).
+            The final report string with a "Sources Consulted" list appended (if any).
         """
-        self.logger.debug("Assembling final report with references...")
+        self.logger.debug("Assembling final report with list of consulted sources...")
+        # Clean the draft first
         cleaned_draft = re.sub(r'<search_request.*?>', '', report_draft, flags=re.IGNORECASE).strip()
 
-        cited_links = set()
-        reference_list_items = []
-
+        consulted_sources = {}
         if writer_context_items:
-            self.logger.debug(f"Checking {len(writer_context_items)} processed sources/chunks for citations in draft...")
+            self.logger.debug(f"Processing {len(writer_context_items)} context items to compile source list...")
             for item in writer_context_items:
-                citation_marker = f"[{item['rank']}]"
-                link = item.get('link')  # Already converted to string during context assembly
+                link = item.get('link') # Should be a string already
                 display_title = item.get('title', 'Untitled')
-
-                if citation_marker in cleaned_draft:
-                    if link and link not in cited_links:
-                        reference_list_items.append((item['rank'], display_title, link))
-                        cited_links.add(link)
-                        self.logger.debug(f"  Found citation {citation_marker} for '{display_title}' ({link})")
-
-            if reference_list_items:
-                reference_list_items.sort(key=lambda x: x[0])  # Sort by the rank
-
-                reference_list_str = "\n\nReferences:\n"
-                # Use the sorted list index for final numbering (1, 2, 3...)
-                for i, (_, title, url) in enumerate(reference_list_items): 
-                    reference_list_str += f"{i+1}. [{title}]({url})\n"
+                # Use link as key to store unique sources
+                if link and link not in consulted_sources:
+                    consulted_sources[link] = {
+                        'title': display_title,
+                        'original_rank': item.get('rank') # Keep original rank for sorting if needed
+                    }
+                    self.logger.debug(f"  Adding source: '{display_title}' ({link})")
+            
+            if consulted_sources:
+                # Sort sources based on their original rank/order in the context items
+                sorted_source_list = sorted(
+                    consulted_sources.values(), 
+                    key=lambda x: x.get('original_rank', float('inf'))
+                )
+                
+                reference_list_str = "\n\nSources Consulted:\n"
+                # Use simple numerical list for the final output
+                for i, source_info in enumerate(sorted_source_list): 
+                    reference_list_str += f"{i+1}. [{source_info['title']}]({list(consulted_sources.keys())[list(consulted_sources.values()).index(source_info)]})\n" # Re-fetch link for safety
 
                 final_report = cleaned_draft + "\n" + reference_list_str.strip()
-                self.logger.info(f"Appended reference list with {len(reference_list_items)} unique, cited sources.")
+                self.logger.info(f"Appended list of {len(sorted_source_list)} unique sources consulted.")
             else:
                 final_report = cleaned_draft
-                self.logger.info("No citations found in draft. Final report has no references.")
+                self.logger.info("No unique sources found in context items. Final report has no source list.")
         else:
             final_report = cleaned_draft
-            self.logger.info("No source materials processed. Final report has no references.")
+            self.logger.info("No source materials provided to writer. Final report has no source list.")
 
         return final_report

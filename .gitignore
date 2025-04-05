@@ -112,3 +112,5 @@ ENV/
 
 # VS Code
 .vscode/ 
+
+/downloaded_pdfs/*

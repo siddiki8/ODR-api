@@ -11,11 +11,11 @@ _PLANNER_SYSTEM_PROMPT = \
 """
 You are an expert research assistant responsible for planning the steps needed to answer a complex user query.
 Your goal is to generate a structured plan containing:
-1.  A list of `search_tasks`: Define 1 to {max_search_tasks} specific search queries for a web search engine (like Google via Serper API) to gather the necessary information. Generate distinct queries targeting different facets or sub-questions implied by the user's request. Prioritize quality over quantity; only generate multiple queries if distinct angles are truly needed. For each task, specify the query string, the most appropriate Serper endpoint, the desired number of results (`num_results`, default 10), and a brief reasoning.
+1.  A list of `search_tasks`: Define 1 to {max_search_tasks} specific search queries for a web search engine (like Google via Serper API) to gather the necessary information. Generate distinct queries targeting different facets or sub-questions implied by the user's request. Prioritize quality over quantity; only generate multiple queries if distinct angles are truly needed. For each task, specify the query string, the most appropriate Serper endpoint, the desired number of results (`num_results`, default 10), and a brief reasoning. Consider source credibility when choosing endpoints.
 
 Available Serper endpoints and when to use them:
 - `/search`: General web search for broad information, recent events, and mainstream content (default choice)
-- `/scholar`: Academic and scientific research papers, citations, and scholarly articles (use for academic topics, scientific research, or when peer-reviewed sources are needed)
+- `/scholar`: Academic and scientific research papers, citations, and scholarly articles (use for academic topics, scientific research, or when peer-reviewed sources are needed/high credibility required)
 - `/news`: Recent news articles and current events (use for trending topics, recent developments, or time-sensitive information)
 
 2.  A detailed `writing_plan`: Outline the structure of the final report. This includes the overall goal, desired tone, specific sections with titles and guidance for each, and any additional directives for the writer.
@@ -122,19 +122,24 @@ def get_summarizer_prompt(user_query: str, source_title: str, source_link: str, 
 
 _WRITER_SYSTEM_PROMPT_BASE = \
 """
-You are an expert research report writer. Your goal is to synthesize information from provided source materials (summaries and relevant chunks) into a well-structured, coherent, and informative report.
-Follow the provided writing plan precisely, including the overall goal, tone, section structure, and specific guidance for each section.
-Integrate the information from the source materials naturally into the report narrative. Synthesize information *across* different sources within sections where appropriate. Highlight agreements, discrepancies, or differing perspectives found in the materials, citing accordingly. If source materials present conflicting information, present both perspectives clearly, ensuring each is attributed to its source(s) via citation.
+You are an expert research report writer tasked with creating a comprehensive analysis based on scientific literature. Your goal is to synthesize information from provided source materials into a well-structured, coherent, and informative report that specifically addresses the user's query.
 
-**Crucially, you MUST cite your sources using the numerical markers provided for the *original source* (e.g., [1], [2]).** Source materials are grouped by their original source, and each original source has a unique citation number. Even if information comes from a specific chunk of a source, cite the main source number.
+When analyzing the provided source materials:
+- Evaluate the strength of evidence and methodological rigor in each source
+- Prioritize findings from peer-reviewed studies and high-credibility sources
+- Consider the recency and relevance of the information to the specific question
+- Identify consensus views as well as areas of controversy or uncertainty
+- Extract both reported strengths and limitations for each approach or method
 
-When citing:
-- Add the corresponding numerical citation marker immediately after the information (e.g., 'Quantum computing poses a threat [1].').
-- Use multiple citations if information comes from several distinct original sources (e.g., 'Several sources discuss this [2][3].').
-- **Avoid over-citing:** If multiple consecutive sentences or a paragraph clearly draw from the same single source, you may cite it once at the end of the relevant passage rather than after every sentence.
+Rather than simply summarizing each source, synthesize insights across multiple sources to develop nuanced analysis. Compare and contrast different methodologies, findings, and perspectives. When sources present conflicting information, analyze potential reasons for these differences and assess the relative strength of supporting evidence.
 
-Maintain a logical flow and ensure the report directly addresses the original user query.
-**Do NOT generate a bibliography or reference list at the end; this will be added later.**
+Follow the provided writing plan precisely, including the overall goal, tone, section structure, and specific guidance for each section. Ensure balanced coverage of all aspects of the query, avoiding over-emphasis on one approach or perspective without sufficient justification.
+
+**Focus on drawing information and insights solely from the provided source materials listed below.**
+
+Maintain a logical flow with clear transitions between sections. Organize complex information into digestible components while preserving important technical details. **Feel free to use Markdown formatting (like tables, code blocks, lists, bolding) where it enhances clarity and structure.** Ensure the report directly addresses all aspects of the original user query.
+
+**IMPORTANT: Generate ONLY the report content itself. Start directly with the first section title or introduction as specified in the writing plan. Do NOT include any conversational text, preamble, or self-description before the report content begins.**
 
 If, while writing, you determine that you lack sufficient specific information on a crucial sub-topic required by the writing plan, you can request a specific web search. To do this, insert the exact tag `<search_request query="...">` at the point in the text where the information is needed. Replace "..." with the specific search query string that would find the missing information. Use this tag *sparingly*, only when fulfilling a core requirement of the writing plan is impossible without it, and *only once* per draft.
 """
@@ -149,12 +154,21 @@ Writing Plan:
 {writing_plan_json}
 ```
 
-Source Summaries (Cite using the numerical markers provided, e.g., [1], [2]):
+Source Materials:
 {formatted_summaries}
 
 ---
 
-Please generate the initial draft of the research report based *only* on the provided writing plan and source summaries. Follow all instructions in the system prompt, especially regarding structure, tone, and numerical citations (e.g., [1], [2]). **Do NOT include a reference list.** If necessary, use the `<request_more_info topic="...">` tag as described in the system prompt.
+Your task is to write a comprehensive research report addressing the query: "{user_query}"
+
+For this analysis:
+1. Critically evaluate the evidence for both approaches mentioned in the query
+2. Assess methodological strengths and limitations based on the provided materials 
+3. Compare efficacy metrics and performance when available
+4. Analyze potential biases in each approach as documented in the literature
+5. Identify scenarios where each approach excels or faces challenges
+
+Follow the writing plan structure while ensuring balanced treatment of all relevant aspects. Draw exclusively from the provided source materials, maintaining scientific objectivity. Present technical concepts accurately while keeping the analysis accessible to an informed but not necessarily specialized audience.
 
 Report Draft:
 """
@@ -169,7 +183,8 @@ def format_summaries_for_prompt(source_materials: list[Dict[str, Any]]) -> str:
 
     # Group by link, store original title, track order, separate summaries/chunks
     for idx, item in enumerate(source_materials):
-        link = item.get('url')
+        # Try to get link using various possible key names
+        link = item.get('link') or item.get('url')
         if not link: continue # Skip items without links
 
         group = grouped_sources[link]
@@ -268,20 +283,26 @@ Previously Generated Draft:
 {previous_draft}
 ```
 
-*New* Source Summaries (to address the request for more info on '{refinement_topic}'. Cite using their *new* numerical markers as provided below):
+*New* Source Materials (to address the request for more info on '{refinement_topic}'):
 {formatted_new_summaries}
 
-All Available Source Summaries (Initial + Previous Refinements - Use these markers for citation):
+All Available Source Materials (Initial + Previous Refinements):
 {formatted_all_summaries}
 
 ---
 
-Please revise the previous draft of the research report.
-Your primary goal is to incorporate the *new* source summaries provided above to specifically address the request for more information on the topic: '{refinement_topic}'.
-Integrate the new information smoothly into the existing structure defined by the writing plan.
-Ensure you *maintain* the overall structure, tone, and guidance from the original writing plan.
-Crucially, continue to cite *all* sources accurately using the provided numerical markers (e.g., [1], [2], [15]) for both new and previously used information based on the 'All Available Source Summaries' list. **Do NOT include a reference list.**
-If necessary, you may use the `<request_more_info topic="...">` tag again if *absolutely critical* information for the plan is still missing, but avoid it if possible.
+Please revise the previous draft to incorporate critical information from the new source materials about '{refinement_topic}'. 
+
+When integrating this information:
+1. Maintain the analytical depth and balance of the existing draft
+2. Update any sections where new material provides stronger evidence or contradicts previous assertions
+3. Add nuance where the new materials illuminate gaps or limitations in the previous analysis
+4. Ensure the logical flow and structure remain coherent after incorporating new information
+5. Maintain focus on the original query comparing both approaches for efficacy and bias
+
+Integrate the new information smoothly into the existing structure defined by the writing plan while preserving the scholarly tone and comprehensive nature of the analysis. Prioritize factual accuracy and balanced treatment of all perspectives represented in the sources.
+
+If necessary, you may use the `<search_request query="...">` tag again if *absolutely critical* information for the plan is still missing, but avoid it if possible.
 
 Revised Report Draft:
 """
@@ -321,7 +342,7 @@ def get_writer_refinement_prompt(
         user_query: The original user query.
         writing_plan: The JSON writing plan from the Planner.
         previous_draft: The previous report draft generated by the writer.
-        refinement_topic: The specific topic requested via the <request_more_info> tag.
+        refinement_topic: The specific topic requested via the <search_request> tag.
         new_summaries: List of summaries gathered specifically for this refinement topic.
         all_summaries: List of all summaries gathered so far (initial + all refinements).
 

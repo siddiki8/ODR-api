@@ -661,10 +661,10 @@ async def root():
     return {"message": "Deep Research API is running."}
 
 # Optional: Configure CORS if needed
-#app.add_middleware(
-#    CORSMiddleware,
-#    allow_origins=["http://localhost:3000"], # Allow all origins for now
-#    allow_credentials=True,
-#    allow_methods=["*"], # Allow all methods
-#    allow_headers=["*"], # Allow all headers
-#) 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"], # Allow all origins for now
+    allow_credentials=True,
+    allow_methods=["*"], # Allow all methods
+    allow_headers=["*"], # Allow all headers
+) 

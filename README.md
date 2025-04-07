@@ -48,7 +48,7 @@ The core research process involves several orchestrated steps:
     *   Input: `sources_to_summarize`, `sources_to_chunk`, User Query.
     *   Action:
         *   For `sources_to_summarize`: Scrapes content (using Crawl4AI and `scraping_utils`), then uses a Summarizer LLM to generate concise summaries relevant to the query.
-        *   For `sources_to_chunk`: Scrapes content, divides it into `Chunk`s, and reranks the chunks for relevance against the query.
+        *   For `sources_to_chunk`: Scrapes content, divides it into `Chunk`s, and reranks the chunks for relevance against the query. Removes less relevant chunks.
     *   Output: List of `SourceSummary` objects and list of relevant `Chunk` objects.
 
 5.  **Context Assembly:**

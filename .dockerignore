@@ -1,0 +1,12 @@
+.git
+.vscode
+__pycache__/
+*.pyc
+.env*
+secrets/
+odr-key.json
+*.pem
+venv/
+.venv/
+research_reports/
+websocket_guide.md

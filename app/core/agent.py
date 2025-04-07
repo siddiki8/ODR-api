@@ -633,47 +633,82 @@ class DeepResearchAgent:
         """
         Assembles and ranks the combined list of summaries and chunks for the writer.
         
-        Assigns a sequential 'rank' used for citation markers.
+        Assigns a sequential 'rank' based on unique source URLs. All items from the
+        same URL will share the same rank. The list returned contains individual items
+        (summaries/chunks), each tagged with the rank of its source URL.
         
         Args:
             processed_summaries: List of SourceSummary objects containing summaries.
             processed_chunks: List of Chunk objects containing relevant text chunks.
             
         Returns:
-            List[Dict[str, Any]]: The ranked list of context items ready for the writer.
+            List[Dict[str, Any]]: A list of context item dictionaries, where each item
+                                (summary or chunk) includes the rank of its source URL.
+                                The list is sorted primarily by rank, then potentially by type/score.
         """
-        self.logger.info("--- Phase 5: Assembling Initial Writer Context ---")
+        self.logger.info("--- Phase 5: Assembling Initial Writer Context (Ranking by URL) ---\n")
         writer_context_items = []
-        current_rank = 1
+        url_rank_map: Dict[str, int] = {}
+        next_rank = 1
         
-        # Add summaries
+        # Combine summaries and chunks into a single list for easier processing
+        all_items_raw = []
         if processed_summaries:
             for s in processed_summaries:
-                writer_context_items.append({
+                all_items_raw.append({
                     "type": "summary", 
                     "content": s.content, 
-                    "link": str(s.link),  # Convert HttpUrl to string
+                    "link": str(s.link), # Ensure link is string
                     "title": s.title,
-                    "rank": current_rank 
+                    # Placeholder for rank
                 })
-                current_rank += 1
-        
-        # Add chunks
         if processed_chunks:
             for c in processed_chunks:
-                writer_context_items.append({
+                all_items_raw.append({
                     "type": "chunk", 
                     "content": c.content, 
-                    "link": str(c.link),  # Convert HttpUrl to string
+                    "link": str(c.link), # Ensure link is string
                     "title": c.title, 
                     "score": c.relevance_score,
-                    "rank": current_rank
+                    # Placeholder for rank
                 })
-                current_rank += 1
+
+        # Assign ranks based on unique URLs in the order they appear
+        # and build the final list with ranks included
+        ranked_items = []
+        for item in all_items_raw:
+            link = item.get('link')
+            if not link:
+                self.logger.warning(f"Skipping context item due to missing link: {item.get('title', 'Untitled')}")
+                continue
+
+            if link not in url_rank_map:
+                url_rank_map[link] = next_rank
+                next_rank += 1
+            
+            item['rank'] = url_rank_map[link] # Assign the URL's rank to the item
+            ranked_items.append(item)
+            
+        # Sort the final list primarily by rank, then maybe by type (summary first) or score?
+        # Sorting ensures materials for the same source appear together in the prompt if needed,
+        # and keeps the final bibliography ordered correctly.
+        # Let's sort by rank, then put summaries before chunks for a given rank.
+        def sort_key(item):
+            rank = item.get('rank', float('inf'))
+            type_priority = 0 if item.get('type') == 'summary' else 1 # Summary first
+            score = item.get('score', 0) # Higher score potentially earlier within chunks?
+            return (rank, type_priority, -score) # -score for descending score sort
+
+        writer_context_items = sorted(ranked_items, key=sort_key)
         
-        context_item_count = len(writer_context_items)
-        context_char_count = sum(len(str(item.get('content', ''))) for item in writer_context_items)
-        self.logger.info(f"Assembled {context_item_count} items (~{context_char_count} chars) for writer.")
+        # Recalculate stats based on the new structure
+        final_unique_source_count = len(url_rank_map)
+        final_item_count = len(writer_context_items)
+        final_char_count = sum(len(str(item.get('content', ''))) for item in writer_context_items)
+
+        self.logger.info(f"Assembled {final_item_count} items from {final_unique_source_count} unique sources (~{final_char_count} chars) for writer.")
+        self.logger.debug(f"URL to Rank mapping: {url_rank_map}")
+        
         return writer_context_items
 
     async def _run_initial_writing_phase(self, user_query: str, planner_output: PlannerOutput, writer_context: List[Dict[str, Any]]) -> str:
@@ -1284,26 +1319,60 @@ class DeepResearchAgent:
     def _assemble_final_report(self, report_draft: str, writer_context_items: List[Dict[str, Any]]) -> str:
         """
         Assembles the final report, processing [[CITATION:rank]] markers and appending
-        a numbered list of all sources provided to the writer.
+        a numbered list of unique sources based on URL ranks.
 
         Removes any remaining <search_request> tags from the draft.
-        Groups sources by unique link for the final list but uses the rank for citation numbers.
+        Uses the rank assigned based on unique URLs for citation numbers and the final list.
 
         Args:
             report_draft: The drafted report text generated by the LLM, potentially
                           containing [[CITATION:rank]] markers.
-            writer_context_items: A list of dictionaries containing assembled context items
-                                (converted from SourceSummary and Chunk objects) that were
-                                provided to the writer, each with a unique 'rank'.
+            writer_context_items: A list of dictionaries containing context items (summaries/chunks)
+                                provided to the writer, each tagged with the 'rank' of its source URL.
 
         Returns:
             The final report string with processed citations and a "Sources Consulted" list appended.
         """
         self.logger.debug("Assembling final report: Processing citations and adding source list...")
 
+        # --- 0. Pre-calculate unique source info --- #
+        # Create a mapping from rank -> {title, link} for unique sources
+        unique_sources_by_rank: Dict[int, Dict[str, str]] = {}
+        max_rank = 0
+        if writer_context_items:
+            temp_url_rank_map: Dict[str, int] = {}
+            next_rank_temp = 1
+            # First pass to establish ranks for unique URLs if not already consistent
+            # (This also helps determine the true max_rank for validation)
+            for item in writer_context_items:
+                link = item.get('link')
+                rank_from_item = item.get('rank') # Use rank assigned earlier
+                if link and rank_from_item is not None:
+                    if link not in temp_url_rank_map:
+                        # Store the rank assigned in _assemble_writer_context
+                        temp_url_rank_map[link] = rank_from_item
+                        # Build the final map using the assigned rank
+                        if rank_from_item not in unique_sources_by_rank:
+                             unique_sources_by_rank[rank_from_item] = {
+                                 'title': item.get('title', 'Untitled'),
+                                 'link': link
+                             }
+                            # Track the highest rank assigned
+                             max_rank = max(max_rank, rank_from_item)
+                    # Ensure consistency if somehow ranks differ for same link (shouldn't happen)
+                    elif temp_url_rank_map[link] != rank_from_item:
+                         self.logger.warning(f"Inconsistent rank found for URL {link}: {temp_url_rank_map[link]} vs {rank_from_item}. Using first encountered: {temp_url_rank_map[link]}")
+                         # Correct the item's rank for safety, although _assemble_writer_context should prevent this
+                         item['rank'] = temp_url_rank_map[link]
+
+            # max_rank = len(unique_sources_by_rank) # Max rank is the highest number assigned
+            self.logger.debug(f"Found {len(unique_sources_by_rank)} unique sources with max rank {max_rank}.")
+        else:
+            max_rank = 0
+            self.logger.debug("No writer context items provided.")
+
         # --- 1. Process Citations --- #
         processed_draft = report_draft
-        max_rank = max((item.get('rank', 0) for item in writer_context_items), default=0)
         citation_errors = []
 
         def replace_citation_marker(match):
@@ -1313,19 +1382,21 @@ class DeepResearchAgent:
                 ranks = [int(r.strip()) for r in ranks_str.split(',')]
                 valid_ranks = []
                 for rank in ranks:
-                    if 1 <= rank <= max_rank:
+                    # Validate against the number of unique sources (max_rank)
+                    if 1 <= rank <= max_rank and rank in unique_sources_by_rank:
                         valid_ranks.append(rank)
                     else:
                         # Log invalid rank found
-                        citation_errors.append(f"Invalid rank {rank} found (max is {max_rank}).")
+                        citation_errors.append(f"Invalid rank {rank} found (max unique source rank is {max_rank}).")
                 if not valid_ranks:
                     # If all ranks in a marker are invalid, return empty string or marker?
                     # Let's return empty for now to avoid showing invalid citations.
-                    self.logger.warning(f"Citation marker '{match.group(0)}' contained only invalid ranks. Removing.")
+                    self.logger.warning(f"Citation marker '{match.group(0)}' contained only invalid/unknown ranks. Removing.")
                     return ""
                 else:
-                    # Format valid ranks into [1] or [1, 2] style
-                    return f"[{', '.join(map(str, sorted(valid_ranks)))}]"""
+                    # Format valid ranks into [1] or [1, 2] style, removing duplicates and sorting
+                    unique_valid_ranks = sorted(list(set(valid_ranks)))
+                    return f"[{', '.join(map(str, unique_valid_ranks))}]"
             except ValueError:
                 # Log error if rank is not an integer
                 citation_errors.append(f"Non-integer rank found: '{ranks_str}'.")
@@ -1346,42 +1417,38 @@ class DeepResearchAgent:
 
         # --- 3. Assemble Source List --- #
         consulted_sources = {}
-        if writer_context_items:
-            self.logger.debug(f"Processing {len(writer_context_items)} context items to compile final source list...")
-            # Use rank as the primary key now for sorting and display
-            ranked_sources = {}
-            for item in writer_context_items:
-                rank = item.get('rank')
-                link = item.get('link') # Should be a string already
-                title = item.get('title', 'Untitled')
+        if unique_sources_by_rank:
+            self.logger.debug(f"Assembling final source list for {len(unique_sources_by_rank)} unique sources...")
+            # Use the pre-calculated unique_sources_by_rank map
+            # ranked_sources = {} # Old approach
+            # for item in writer_context_items:
+            #     rank = item.get('rank')
+            #     link = item.get('link') # Should be a string already
+            #     title = item.get('title', 'Untitled')
+            #     if rank is not None and link is not None:
+            #         # Store title and link associated with each rank
+            #         # If multiple items have the same rank (shouldn't happen), last one wins
+            #         if rank not in ranked_sources: # Store only the first title/link encountered for a rank
+            #             ranked_sources[rank] = {
+            #                 'title': title,
+            #                 'link': link
+            #             }
+            #     else:
+            #         self.logger.warning(f"Skipping item for source list due to missing rank or link: {item}")
 
-                if rank is not None and link is not None:
-                    # Store title and link associated with each rank
-                    # If multiple items have the same rank (shouldn't happen), last one wins
-                    ranked_sources[rank] = {
-                        'title': title,
-                        'link': link
-                    }
-                else:
-                    self.logger.warning(f"Skipping item for source list due to missing rank or link: {item}")
+            # Sort by rank (key of the dict)
+            sorted_ranks = sorted(unique_sources_by_rank.keys())
 
-            if ranked_sources:
-                # Sort by rank (key of the dict)
-                sorted_ranks = sorted(ranked_sources.keys())
+            reference_list_str = "\n\nSources Consulted:\n"
+            for rank in sorted_ranks:
+                source_info = unique_sources_by_rank[rank]
+                # Format: 1. [Title](link)
+                reference_list_str += f"{rank}. [{source_info['title']}]({source_info['link']})\n"
 
-                reference_list_str = "\n\nSources Consulted:\n"
-                for rank in sorted_ranks:
-                    source_info = ranked_sources[rank]
-                    # Format: 1. [Title](link)
-                    reference_list_str += f"{rank}. [{source_info['title']}]({source_info['link']})\n"
-
-                final_report = cleaned_draft + "\n" + reference_list_str.strip()
-                self.logger.info(f"Appended list of {len(sorted_ranks)} sources consulted, ordered by rank.")
-            else:
-                final_report = cleaned_draft
-                self.logger.info("No valid ranked sources found in context items. Final report has no source list.")
+            final_report = cleaned_draft + "\n" + reference_list_str.strip()
+            self.logger.info(f"Appended list of {len(sorted_ranks)} unique sources consulted, ordered by rank.")
         else:
             final_report = cleaned_draft
-            self.logger.info("No source materials provided to writer. Final report has no source list.")
+            self.logger.info("No source materials provided or processed. Final report has no source list.")
 
         return final_report

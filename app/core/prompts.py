@@ -234,12 +234,13 @@ Report Draft:
 # --- Helper Function to Format Summaries/Chunks for Prompts ---
 def format_summaries_for_prompt(source_materials: list[Dict[str, Any]]) -> str:
     """
-    Formats summaries/chunks for the writer prompt, displaying each item
-    with its unique rank for citation purposes.
+    Formats summaries/chunks for the writer prompt, grouping items by their
+    source URL rank and displaying each unique source with its rank once.
 
     Args:
         source_materials: List of dictionaries, each representing a summary or chunk
-                          with a 'rank', 'link', 'title', and 'content'.
+                          with a 'rank' (based on unique URL), 'link', 'title', and 'content'.
+                          The list MUST be pre-sorted by rank for correct grouping.
 
     Returns:
         A formatted string representation of the source materials for the LLM prompt.
@@ -248,28 +249,32 @@ def format_summaries_for_prompt(source_materials: list[Dict[str, Any]]) -> str:
         return "No source materials available."
 
     formatted_output = []
-    # Sort by rank to ensure consistent order in the prompt
-    # Items should already be ranked sequentially by _assemble_writer_context
-    sorted_materials = sorted(source_materials, key=lambda x: x.get('rank', float('inf')))
+    last_rank = -1
 
-    for item in sorted_materials:
+    # Assumes source_materials is sorted by rank (as done in _assemble_writer_context)
+    for item in source_materials:
         rank = item.get('rank')
-        link = item.get('link') # Should be string
+        link = item.get('link')
         title = item.get('title', 'Untitled')
         content = item.get('content', 'N/A')
-        item_type = item.get('type', 'Unknown') # 'summary' or 'chunk'
-        score = item.get('score') # For chunks
+        item_type = item.get('type', 'Unknown')
+        score = item.get('score')
 
         if rank is None or link is None:
-            # Log this? Skip this? For now, skip if rank/link missing.
-            continue
+            continue # Skip items missing essential info
 
-        # Header for each item using its rank
-        source_header = f"[{rank}] {title} ({link})"
-        formatted_output.append(source_header)
+        # Check if this is a new source rank
+        if rank != last_rank:
+            if last_rank != -1:
+                formatted_output.append("\n") # Add space between sources
+            source_header = f"[{rank}] {title} ({link})"
+            formatted_output.append(source_header)
+            last_rank = rank
 
-        # Display content (summary or chunk)
+        # Add the content (summary or chunk) under the current source header
         if item_type == 'summary':
+            # Prepend "Summary:" only if there are also chunks for this source, or if it's the only item
+            # To simplify, let's always prepend "Summary:" for clarity
             formatted_output.append(f"  Summary: {content}")
         elif item_type == 'chunk':
             score_str = f" (Score: {score:.2f})" if score is not None else ""
@@ -277,7 +282,7 @@ def format_summaries_for_prompt(source_materials: list[Dict[str, Any]]) -> str:
         else:
             formatted_output.append(f"  Content: {content}") # Fallback
 
-    return "\n\n".join(formatted_output)
+    return "\n".join(formatted_output) # Use single newline for tighter packing in prompt
 
 def get_writer_initial_prompt(user_query: str, writing_plan: dict, source_materials: list[dict[str, Any]]) -> list[dict[str, str]]:
     """

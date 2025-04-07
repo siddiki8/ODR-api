@@ -663,7 +663,7 @@ async def root():
 # Optional: Configure CORS if needed
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"], # Allow all origins for now
+    allow_origins=["http://https://odr-frontend.vercel.app"], # Allow all origins for now
     allow_credentials=True,
     allow_methods=["*"], # Allow all methods
     allow_headers=["*"], # Allow all headers

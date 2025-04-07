@@ -18,16 +18,17 @@ websockets>=11.0.3 # Keep if needed for FastAPI/uvicorn or other async comms
 httpx>=0.24.0 # Used for downloading PDFs and potentially by Crawl4AI
 
 # Web Scraping & Related
-crawl4ai[playwright]>=0.4.0 # Use Playwright backend
+git+https://github.com/salzubi401/crawl4ai.git@main
 wikipedia-api>=0.6.0
-markitdown[pdf]>=0.1.1 # Use MarkItDown for PDF conversion
+markitdown # Use MarkItDown for PDF conversion
 langchain-text-splitters
+PyMuPDF
 
 # Reranking
 together
 
-# NiceGUI
-nicegui>=1.4.0
-
 # Markdown
 markdown>=3.5.1
+
+#database
+firebase-admin

@@ -943,7 +943,7 @@ class DeepResearchAgent:
         self.logger.info(f"Starting deep research for query: '{user_query[:100]}...'")
         await self._send_ws_update("STARTING", "START", "Research process initiated.")
 
-        final_report = "Error: Research did not complete." # Default in case of early exit
+        final_report_content = "Error: Research did not complete." # Default in case of early exit
         final_context = [] # Will hold the list of dicts for writer/final assembly
         latest_draft = ""
         refinement_iterations_run = 0
@@ -986,25 +986,28 @@ class DeepResearchAgent:
             await self._send_ws_update("FINALIZING", "START", "Assembling final report...")
             try:
                 # Use the potentially updated final_context list returned by the loop
-                final_report = self._assemble_final_report(latest_draft, final_context) 
-                self.logger.info(f"Final report assembled (length: {len(final_report)} chars).")
-                await self._send_ws_update("FINALIZING", "END", "Final report assembled.")
+                final_report_content = self._assemble_final_report(latest_draft, final_context) 
+                self.logger.info(f"Final report assembled (length: {len(final_report_content)} chars).")
+                # Include the actual report content in the FINALIZING/END message details
+                await self._send_ws_update("FINALIZING", "END", "Final report assembled.", {"final_report": final_report_content})
             except Exception as e:
                  self.logger.error(f"Error during final report assembly: {e}", exc_info=True)
-                 await self._send_ws_update("FINALIZING", "ERROR", "Failed to assemble final report.")
-                 final_report = latest_draft # Use latest draft as fallback
+                 # Send error status for FINALIZING, but keep the latest draft as fallback content
+                 await self._send_ws_update("FINALIZING", "ERROR", f"Failed to assemble final report: {e}")
+                 final_report_content = latest_draft # Use latest draft as fallback
                  self.logger.warning("Using latest draft as final report due to assembly error.")
-                 await self._send_ws_update("FINALIZING", "INFO", "Using latest draft due to assembly error.")
+                 # Still send FINALIZING/END, but indicate fallback (maybe add detail?)
+                 await self._send_ws_update("FINALIZING", "INFO", "Using latest draft due to assembly error.") # Changed status to INFO
 
         except AgentExecutionError as e:
             # Logged within the phase method where it originated
-            final_report = f"Error: Research process failed during execution. {e}" 
+            final_report_content = f"Error: Research process failed during execution. {e}" 
             # Ensure we send a final error status if we reach here
             await self._send_ws_update("ERROR", "FATAL", f"Agent execution failed: {e}")
         except Exception as e:
             # Catch any other unexpected errors during orchestration
             self.logger.critical(f"Unexpected critical error during research orchestration: {e}", exc_info=True)
-            final_report = f"Error: An unexpected critical error occurred: {e}"
+            final_report_content = f"Error: An unexpected critical error occurred: {e}"
             await self._send_ws_update("ERROR", "FATAL", f"Critical error: {e}")
         finally:
             # Phase 9: Completion & Stats (Use final count of processed URLs)
@@ -1022,20 +1025,26 @@ class DeepResearchAgent:
             
             self.logger.info(f"Final Usage: {usage_statistics.model_dump()}")
 
-            # Send final COMPLETE/ERROR message
-            final_status = "COMPLETE" if not final_report.startswith("Error:") else "ERROR"
+            # Prepare the final result dictionary including the context
+            result_dict = {
+                "final_report": final_report_content,
+                "usage_statistics": usage_statistics.model_dump(),
+                "final_context": final_context # Include the final context list
+            }
+
+            # Send final COMPLETE/ERROR message (without the report content, it was sent in FINALIZING)
+            final_status = "COMPLETE" if not final_report_content.startswith("Error:") else "ERROR"
             final_ws_status = "END" if final_status == "COMPLETE" else "FATAL"
             final_ws_message = "Research process completed successfully." if final_status == "COMPLETE" else "Research process failed."
             
             await self._send_ws_update(final_status, final_ws_status, final_ws_message, {
-                "final_report_length": len(final_report),
+                "final_report_length": len(final_report_content),
                 "usage": usage_statistics.model_dump(),  # Convert to dict for JSON serialization
+                # REMOVED final_report content here
             })
 
-            return {
-                "final_report": final_report,
-                "usage_statistics": usage_statistics.model_dump()
-            }
+            # Return the dictionary containing report, stats, and context
+            return result_dict
 
     # --- Existing Helper Methods --- #
     
@@ -1078,8 +1087,13 @@ class DeepResearchAgent:
                 self.logger.debug(f"{action_prefix}Successfully scraped {len(scraped_content)} chars from {url} (source: {scrape_source_name})")
             else:
                 # Handle case where scrape succeeded but content is empty/None, or scrape failed implicitly
+                # CHANGED: Log warning, send WS WARNING, return None instead of raising error
                 error_detail = f"ExtractionResult content was empty or None." if scrape_result else f"scrape() returned None or failed."
-                raise ScrapingError(f"No valid content extracted from {url}. {error_detail}")
+                warning_msg = f"No valid content extracted from {url}. {error_detail}. Skipping summarization."
+                self.logger.warning(f"{action_prefix}{warning_msg}")
+                await self._send_ws_update(stage, "WARNING", f"{action_prefix}Failed to fetch content from {url}. Skipping.", {"source_url": url, "reason": "No content returned by scraper"})
+                return None
+                # REMOVED: raise ScrapingError(f"No valid content extracted from {url}. {error_detail}")
             
             # STEP 3: Summarize with LLM
             await self._send_ws_update(stage, "IN_PROGRESS", f"{action_prefix}Summarizing content...", {"source_url": url, "action": "Summarizing"})
@@ -1112,6 +1126,7 @@ class DeepResearchAgent:
 
             if not summary_content.strip():
                 # Raise error only if content is empty after attempting access
+                # NOTE: This error now implies the LLM failed, not the scraping. Keep as LLMError? Yes.
                 raise LLMError("Summarizer returned empty content or failed to extract content from response.")
 
             # STEP 4: Log usage and update progress
@@ -1131,8 +1146,10 @@ class DeepResearchAgent:
             return summary, scraped_content # Return summary and original content
             
         except (ScrapingError, LLMError) as e:
-            error_msg = f"{action_prefix}Error processing {url}: {type(e).__name__}"
+            # This block now primarily catches LLM errors or UNEXPECTED ScrapingErrors (e.g., from summarizer LLM call if it raised one somehow)
+            error_msg = f"{action_prefix}Error processing {url} during summarization phase: {type(e).__name__}"
             self.logger.warning(error_msg, exc_info=False)
+            # Keep sending ERROR here as it's likely an LLM or unexpected issue now
             await self._send_ws_update(stage, "ERROR", f"{action_prefix}Failed to summarize {url}: {type(e).__name__}", {"source_url": url, "error": type(e).__name__})
             return None  # Indicate failure
         except Exception as e:
@@ -1180,8 +1197,14 @@ class DeepResearchAgent:
                 scraped_content = scrape_result.content
                 self.logger.debug(f"{action_prefix}Successfully scraped {len(scraped_content)} chars from {url} (source: {scrape_result.name})")
             else:
+                # Handle case where scrape succeeded but content is empty/None, or scrape failed implicitly
+                # CHANGED: Log warning, send WS WARNING, return [] instead of raising error
                 error_detail = f"ExtractionResult content was empty or None." if scrape_result else f"scrape() returned None or failed."
-                raise ScrapingError(f"No valid content extracted from {url} by any strategy for chunking. {error_detail}")
+                warning_msg = f"No valid content extracted from {url} by any strategy for chunking. {error_detail}. Skipping chunking."
+                self.logger.warning(f"{action_prefix}{warning_msg}")
+                await self._send_ws_update(stage, "WARNING", f"{action_prefix}Failed to fetch content from {url}. Skipping.", {"source_url": url, "reason": "No content returned by scraper"})
+                return []
+                # REMOVED: raise ScrapingError(f"No valid content extracted from {url} by any strategy for chunking. {error_detail}")
 
             # STEP 3: Chunk the content
             await self._send_ws_update(stage, "IN_PROGRESS", f"{action_prefix}Chunking content...", {"source_url": url, "action": "Chunking"})
@@ -1246,9 +1269,11 @@ class DeepResearchAgent:
             return filtered_chunks
             
         except ScrapingError as e:
-            error_msg = f"{action_prefix}Scraping error for {url}: {type(e).__name__}"
+            # This block now catches unexpected ScrapingErrors potentially raised during chunking/reranking itself
+            error_msg = f"{action_prefix}Scraping error during chunk/rerank for {url}: {type(e).__name__}"
             self.logger.warning(error_msg, exc_info=False)
-            await self._send_ws_update(stage, "ERROR", f"{action_prefix}Failed to fetch content from {url}: {type(e).__name__}", {"source_url": url, "error": type(e).__name__})
+            # Keep sending ERROR here for unexpected issues during chunk/rerank
+            await self._send_ws_update(stage, "ERROR", f"{action_prefix}Failed during chunk/rerank for {url}: {type(e).__name__}", {"source_url": url, "error": type(e).__name__})
             return []
         except Exception as e:
             error_msg = f"{action_prefix}Unexpected error processing {url}: {type(e).__name__}"
@@ -1258,55 +1283,103 @@ class DeepResearchAgent:
 
     def _assemble_final_report(self, report_draft: str, writer_context_items: List[Dict[str, Any]]) -> str:
         """
-        Assembles the final report, appending a list of all sources provided to the writer.
-        
+        Assembles the final report, processing [[CITATION:rank]] markers and appending
+        a numbered list of all sources provided to the writer.
+
         Removes any remaining <search_request> tags from the draft.
-        Groups sources by unique link to avoid duplicates in the final list.
-        
+        Groups sources by unique link for the final list but uses the rank for citation numbers.
+
         Args:
-            report_draft: The drafted report text generated by the LLM.
+            report_draft: The drafted report text generated by the LLM, potentially
+                          containing [[CITATION:rank]] markers.
             writer_context_items: A list of dictionaries containing assembled context items
                                 (converted from SourceSummary and Chunk objects) that were
-                                provided to the writer.
-        
-        Returns:
-            The final report string with a "Sources Consulted" list appended (if any).
-        """
-        self.logger.debug("Assembling final report with list of consulted sources...")
-        # Clean the draft first
-        cleaned_draft = re.sub(r'<search_request.*?>', '', report_draft, flags=re.IGNORECASE).strip()
+                                provided to the writer, each with a unique 'rank'.
 
+        Returns:
+            The final report string with processed citations and a "Sources Consulted" list appended.
+        """
+        self.logger.debug("Assembling final report: Processing citations and adding source list...")
+
+        # --- 1. Process Citations --- #
+        processed_draft = report_draft
+        max_rank = max((item.get('rank', 0) for item in writer_context_items), default=0)
+        citation_errors = []
+
+        def replace_citation_marker(match):
+            ranks_str = match.group(1)
+            try:
+                # Parse potentially comma-separated ranks
+                ranks = [int(r.strip()) for r in ranks_str.split(',')]
+                valid_ranks = []
+                for rank in ranks:
+                    if 1 <= rank <= max_rank:
+                        valid_ranks.append(rank)
+                    else:
+                        # Log invalid rank found
+                        citation_errors.append(f"Invalid rank {rank} found (max is {max_rank}).")
+                if not valid_ranks:
+                    # If all ranks in a marker are invalid, return empty string or marker?
+                    # Let's return empty for now to avoid showing invalid citations.
+                    self.logger.warning(f"Citation marker '{match.group(0)}' contained only invalid ranks. Removing.")
+                    return ""
+                else:
+                    # Format valid ranks into [1] or [1, 2] style
+                    return f"[{', '.join(map(str, sorted(valid_ranks)))}]"""
+            except ValueError:
+                # Log error if rank is not an integer
+                citation_errors.append(f"Non-integer rank found: '{ranks_str}'.")
+                self.logger.warning(f"Citation marker '{match.group(0)}' contained non-integer rank. Removing.")
+                return "" # Remove invalid marker
+
+        # Regex to find [[CITATION:rank1,rank2,...]] markers
+        # It allows spaces around the numbers and commas
+        citation_pattern = re.compile(r"\[\[CITATION:\s*([\d\s,]+?)\s*\]\]")
+        processed_draft = citation_pattern.sub(replace_citation_marker, report_draft)
+
+        if citation_errors:
+            self.logger.warning(f"Found {len(citation_errors)} issues during citation processing: {'; '.join(citation_errors)}")
+
+        # --- 2. Clean Remaining Tags --- #
+        # Remove any stray search request tags
+        cleaned_draft = re.sub(r'<search_request.*?>', '', processed_draft, flags=re.IGNORECASE).strip()
+
+        # --- 3. Assemble Source List --- #
         consulted_sources = {}
         if writer_context_items:
-            self.logger.debug(f"Processing {len(writer_context_items)} context items to compile source list...")
+            self.logger.debug(f"Processing {len(writer_context_items)} context items to compile final source list...")
+            # Use rank as the primary key now for sorting and display
+            ranked_sources = {}
             for item in writer_context_items:
+                rank = item.get('rank')
                 link = item.get('link') # Should be a string already
-                display_title = item.get('title', 'Untitled')
-                # Use link as key to store unique sources
-                if link and link not in consulted_sources:
-                    consulted_sources[link] = {
-                        'title': display_title,
-                        'original_rank': item.get('rank') # Keep original rank for sorting if needed
+                title = item.get('title', 'Untitled')
+
+                if rank is not None and link is not None:
+                    # Store title and link associated with each rank
+                    # If multiple items have the same rank (shouldn't happen), last one wins
+                    ranked_sources[rank] = {
+                        'title': title,
+                        'link': link
                     }
-                    self.logger.debug(f"  Adding source: '{display_title}' ({link})")
-            
-            if consulted_sources:
-                # Sort sources based on their original rank/order in the context items
-                sorted_source_list = sorted(
-                    consulted_sources.values(), 
-                    key=lambda x: x.get('original_rank', float('inf'))
-                )
-                
+                else:
+                    self.logger.warning(f"Skipping item for source list due to missing rank or link: {item}")
+
+            if ranked_sources:
+                # Sort by rank (key of the dict)
+                sorted_ranks = sorted(ranked_sources.keys())
+
                 reference_list_str = "\n\nSources Consulted:\n"
-                # Use simple numerical list for the final output
-                for i, source_info in enumerate(sorted_source_list): 
-                    reference_list_str += f"{i+1}. [{source_info['title']}]({list(consulted_sources.keys())[list(consulted_sources.values()).index(source_info)]})\n" # Re-fetch link for safety
+                for rank in sorted_ranks:
+                    source_info = ranked_sources[rank]
+                    # Format: 1. [Title](link)
+                    reference_list_str += f"{rank}. [{source_info['title']}]({source_info['link']})\n"
 
                 final_report = cleaned_draft + "\n" + reference_list_str.strip()
-                self.logger.info(f"Appended list of {len(sorted_source_list)} unique sources consulted.")
+                self.logger.info(f"Appended list of {len(sorted_ranks)} sources consulted, ordered by rank.")
             else:
                 final_report = cleaned_draft
-                self.logger.info("No unique sources found in context items. Final report has no source list.")
+                self.logger.info("No valid ranked sources found in context items. Final report has no source list.")
         else:
             final_report = cleaned_draft
             self.logger.info("No source materials provided to writer. Final report has no source list.")

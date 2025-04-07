@@ -33,8 +33,8 @@ The `step` field indicates the current phase of the research process:
 -   `FILTERING`: Assembling context items (summaries/chunks) for the writer.
 -   `WRITING`: Generating the initial report draft.
 -   `REFINING`: Iterative refinement loop (searching, processing new info, regenerating draft).
--   `FINALIZING`: Assembling the final report structure.
--   `COMPLETE`: The entire process finished successfully.
+-   `FINALIZING`: Assembling the final report structure, including adding references. **The final report content is sent in this step.**
+-   `COMPLETE`: The entire process finished successfully. Contains final usage statistics.
 -   `ERROR`: An error occurred, potentially terminating the process.
 
 ## Possible `status` Values
@@ -46,7 +46,7 @@ The `status` field provides more detail within a `step`:
 -   `IN_PROGRESS`: Indicates the step is actively working (often used for long-running tasks like `PROCESSING` or `REFINING`).
 -   `SUCCESS`: Used within `PROCESSING` to indicate a single source was processed successfully.
 -   `ERROR`: Indicates an error occurred during the step. This might be recoverable (e.g., a single source failing in `PROCESSING`) or fatal (e.g., `INITIALIZING`/`ERROR`).
--   `INFO`: Provides informational updates, often within `REFINING` (e.g., "No further search requested").
+-   `INFO`: Provides informational updates, often within `REFINING` (e.g., "No further search requested") or `FINALIZING` (e.g., "Using latest draft due to assembly error.").
 -   `WARNING`: Indicates a non-critical issue occurred (e.g., `PROCESSING`/`WARNING` if chunking yields no chunks).
 -   `FATAL`: Used with `step: ERROR` for unrecoverable errors forcing termination.
 
@@ -167,11 +167,23 @@ The `details` object provides context. Here are examples for important messages:
        // No specific data fields defined currently, message contains the query
      }
      ```
+   *(Note: The final report is NOT sent during the REFINING step.)*
 
 ---
 
-**10. `step: COMPLETE`, `status: END`**
-    - The entire research process finished successfully.
+**10. `step: FINALIZING`, `status: END`**
+   - Final report assembly is complete. **This message contains the full final report.**
+   - `details`:
+      ```json
+      {
+        "final_report": "# Final Report Title\n\nReport content..." // String containing the full Markdown report
+      }
+      ```
+
+---
+
+**11. `step: COMPLETE`, `status: END`**
+    - The entire research process finished successfully. **This message contains usage statistics but NOT the final report content.**
     - `details`:
       ```json
       {
@@ -195,13 +207,13 @@ The `details` object provides context. Here are examples for important messages:
             "sources_processed_count": 32,
             "refinement_iterations_run": 2
         }
-        // Note: "final_report" content is NOT included here anymore.
+        // Note: "final_report" content is NOT included here. Look for it in the FINALIZING/END message.
       }
       ```
 
 ---
 
-**11. `step: ERROR`, `status: ERROR` or `status: FATAL`**
+**12. `step: ERROR`, `status: ERROR` or `status: FATAL`**
     - A potentially fatal error occurred.
     - `details`: Often includes:
       ```json

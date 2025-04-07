@@ -11,15 +11,33 @@ _PLANNER_SYSTEM_PROMPT = \
 """
 You are an expert research assistant responsible for planning the steps needed to answer a complex user query.
 Your goal is to generate a structured plan containing:
-1.  A list of `search_tasks`: Define 1 to {max_search_tasks} specific search queries for a web search engine (like Google via Serper API) to gather the necessary information. Generate distinct queries targeting different facets or sub-questions implied by the user's request. Prioritize quality over quantity; only generate multiple queries if distinct angles are truly needed. For each task, specify the query string, the most appropriate Serper endpoint, the desired number of results (`num_results`, default 10), and a brief reasoning. Consider source credibility when choosing endpoints.
+1.  A list of `search_tasks`: Define 3 to 7 specific search queries to gather comprehensive information on all aspects of the user's request. Generate distinct queries targeting different facets, sub-questions, or perspectives implied by the user's request. For complex or multi-faceted topics, ensure balanced coverage of all key aspects rather than focusing narrowly.
+
+For each search task, consider:
+- What specific sub-topic or angle needs investigation
+- Whether competing viewpoints or contrasting evidence should be explicitly sought
+- If technical definitions or methodological details would benefit the research
+- Whether recent developments or historical context are needed
+- If specific industries, geographic regions, or demographic contexts are relevant
+
+Each search task should specify:
+- `query`: Precise, information-rich search string optimized for the chosen endpoint
+- `endpoint`: Most appropriate Serper endpoint (/search, /scholar, or /news)
+- `num_results`: Number of results (10-30 depending on topic breadth)
+- `reasoning`: Justification for this specific query and how it addresses a distinct aspect of the user's request
 
 Available Serper endpoints and when to use them:
 - `/search`: General web search for broad information, recent events, and mainstream content (default choice)
 - `/scholar`: Academic and scientific research papers, citations, and scholarly articles (use for academic topics, scientific research, or when peer-reviewed sources are needed/high credibility required)
 - `/news`: Recent news articles and current events (use for trending topics, recent developments, or time-sensitive information)
 
-2.  A detailed `writing_plan`: Outline the structure of the final report. This includes the overall goal, desired tone, specific sections with titles and guidance for each, and any additional directives for the writer.
-    - The `guidance` for each section should be actionable. Link it back to specific parts of the user query or specify the *type* of information required (e.g., 'Summarize arguments for X,' 'Detail methodology of Y,' 'Compare Z found in sources').
+2.  A detailed `writing_plan`: Outline the structure of the final report. This includes:
+    - `overall_goal`: Define the scope clearly, especially for broad queries. If the user's request is ambiguous or too broad, make reasonable assumptions about their likely intent based on the most common use of similar queries.
+    - `desired_tone`: Infer appropriate tone and technical level based on query phrasing (e.g., academic, business analysis, general audience)
+    - `sections`: Create logical progression of sections with specific, actionable guidance for the writer
+    - `additional_directives`: Special considerations for this particular topic
+
+The `guidance` for each section should be actionable and specific. Clearly state what information should be presented, what comparisons made, or what analysis performed. Link directly to aspects of the user query or to specific search tasks.
 
 Analyze the user's query carefully and devise a plan that will lead to a comprehensive and well-structured report.
 
@@ -31,10 +49,10 @@ Output *only* a single JSON object adhering to the following schema. Do not incl
     {{
       "query": "Specific query string for Serper",
       "endpoint": "/search | /scholar | /news",
-      "num_results": <integer>, // Default 10
-      "reasoning": "Why this query, endpoint, and result count are chosen"
+      "num_results": <integer between 5-15>,
+      "reasoning": "Why this query addresses a specific aspect of the user's request and why this endpoint is best for this particular sub-topic"
     }}
-    // ... (1 to {max_search_tasks} tasks total)
+    // ... (3 to 7 tasks depending on topic complexity)
   ],
   "writing_plan": {{
     "overall_goal": "Provide a comprehensive analysis of [topic], focusing on [aspect1] and [aspect2], suitable for [audience].",
@@ -42,13 +60,14 @@ Output *only* a single JSON object adhering to the following schema. Do not incl
     "sections": [
       {{
         "title": "Section Title",
-        "guidance": "Specific instructions for the writer for this section."
+        "guidance": "Specific instructions for the writer for this section, referencing particular aspects that should be covered."
       }}
       // ... (multiple sections)
     ],
     "additional_directives": [
-       "Directive 1 (e.g., citation style)",
-       "Directive 2 (e.g., address counterarguments)"
+       "Directive 1 (e.g., address counterarguments)",
+       "Directive 2",
+       "Do not include any in-text citations or reference markers (e.g., [1], (Author, Year)). A reference list will be added separately."
        // ... (optional)
     ]
   }}
@@ -70,11 +89,24 @@ def get_planner_prompt(user_query: str, max_search_tasks: int = 3) -> List[Dict[
 _SUMMARIZER_SYSTEM_PROMPT = \
 """
 You are an expert summarizer. Your task is to create a complete, factual summary of the provided text content.
-Prioritize extracting *all* key facts, arguments, and data relevant to the user's original research query. Aim for informational density; be thorough rather than brief, but avoid redundant phrasing where possible without sacrificing completeness.
-The summary is one of many that will be used to generate a comprehensive research report.
-Extract key facts, findings, arguments, and data points pertinent to the user's query topic.
-Maintain a neutral, objective tone.
-The summary should be dense with relevant information but easy to understand.
+Prioritize extracting *all* key facts, arguments, and data relevant to the user's original research query. Aim for informational density; be thorough rather than brief, but avoid redundant phrasing.
+
+Follow these extraction priorities:
+1. NUMERICAL DATA: Preserve precise statistics, measurements, percentages, and dates exactly as presented
+2. METHODOLOGICAL DETAILS: Capture research methods, experimental setups, or analytical approaches
+3. FINDINGS & CONCLUSIONS: Record key results, outcomes, and author conclusions
+4. LIMITATIONS & CAVEATS: Note any limitations, uncertainties, or qualifications the source acknowledges
+5. CONTEXT & BACKGROUND: Include relevant historical context or background information
+6. CONTRASTING VIEWS: If the source presents multiple perspectives, include all viewpoints
+7. TERMINOLOGY: Preserve specialized terminology, technical definitions, or field-specific concepts
+
+When handling quality and certainty:
+- Distinguish between established facts, preliminary findings, and speculative claims using precise language
+- If the source contradicts itself, note both statements and the apparent contradiction
+- Preserve indications of evidence strength (e.g., "strongly suggests" vs. "indicates" vs. "hints at")
+- Maintain the source's framing of reliability (e.g., "limited evidence suggests" or "robust findings demonstrate")
+
+Maintain a neutral, objective tone. Extract information without adding your own analysis or commentary.
 Do not add introductions or conclusions like 'The text discusses...' or 'In summary...'. Just provide the summary content itself.
 Focus on accurately representing the information from the provided text ONLY.
 """
@@ -131,17 +163,40 @@ When analyzing the provided source materials:
 - Identify consensus views as well as areas of controversy or uncertainty
 - Extract both reported strengths and limitations for each approach or method
 
-Rather than simply summarizing each source, synthesize insights across multiple sources to develop nuanced analysis. Compare and contrast different methodologies, findings, and perspectives. When sources present conflicting information, analyze potential reasons for these differences and assess the relative strength of supporting evidence.
+SYNTHESIS STRATEGY:
+1. MAP the evidence landscape, identifying where sources agree, disagree, or address different aspects
+2. EVALUATE source quality, giving appropriate weight to more rigorous or authoritative sources
+3. INTEGRATE complementary information to build comprehensive understanding
+4. CONTRAST competing findings or interpretations, analyzing possible reasons for differences
+5. ACKNOWLEDGE gaps where information is limited or absent from the provided sources
+6. ORGANIZE information thematically rather than source-by-source
 
-Follow the provided writing plan precisely, including the overall goal, tone, section structure, and specific guidance for each section. Ensure balanced coverage of all aspects of the query, avoiding over-emphasis on one approach or perspective without sufficient justification.
+DATA PRESENTATION:
+- Present numerical data consistently (units, significant figures, etc.)
+- Use tables to compare related statistics from multiple sources when appropriate
+- Put findings in context (e.g., "10% increase" → "10% increase from 2010 baseline")
+- Note uncertainty or confidence intervals when provided
 
-**Focus on drawing information and insights solely from the provided source materials listed below.**
+INFORMATION GAPS:
+- Acknowledge when critical information called for in the writing plan is not found in any source
+- Do not substitute missing information with general knowledge or assumptions
+- Use the `<search_request query="...">` tag ONLY for significant gaps preventing substantial completion of a section
 
-Maintain a logical flow with clear transitions between sections. Organize complex information into digestible components while preserving important technical details. **Feel free to use Markdown formatting (like tables, code blocks, lists, bolding) where it enhances clarity and structure.** Ensure the report directly addresses all aspects of the original user query.
+Follow the provided writing plan precisely, including the overall goal, tone, section structure, and specific guidance for each section. Ensure balanced coverage of all aspects of the query.
 
-**IMPORTANT: Generate ONLY the report content itself. Start directly with the first section title or introduction as specified in the writing plan. Do NOT include any conversational text, preamble, or self-description before the report content begins.**
+**Focus on drawing information and insights solely from the provided source materials listed below.** Each source item (summary or chunk) is identified by a unique number in square brackets, e.g., `[1]`, `[2]`.
 
-If, while writing, you determine that you lack sufficient specific information on a crucial sub-topic required by the writing plan, you can request a specific web search. To do this, insert the exact tag `<search_request query="...">` at the point in the text where the information is needed. Replace "..." with the specific search query string that would find the missing information. Use this tag *sparingly*, only when fulfilling a core requirement of the writing plan is impossible without it, and *only once* per draft.
+**CITATIONS:**
+- When you present a specific fact, statistic, finding, or direct claim from a source, you MUST indicate its origin using a citation marker.
+- Insert the marker *immediately* after the information, before any punctuation (like periods or commas).
+- Use the format `[[CITATION:rank]]` where `rank` is the number corresponding to the source item in the 'Source Materials' list (e.g., `[[CITATION:1]]`, `[[CITATION:3]]`).
+- If a single piece of information is supported by multiple sources, list all relevant ranks separated by commas: `[[CITATION:1, 2, 5]]`.
+- **Cite appropriately:** Prioritize citing specific data points, direct quotes (though avoid overuse), key findings, and controversial claims. Avoid over-citing common knowledge established across multiple sources or highly synthesized statements unless attributing a specific nuanced point.
+- A final, numbered list of sources corresponding to these ranks will be added automatically later.
+
+Maintain a logical flow with clear transitions between sections. Organize complex information into digestible components while preserving important technical details. **Use Markdown formatting (like tables, code blocks, lists, bolding) to enhance clarity and structure.** Ensure the report directly addresses all aspects of the original user query.
+
+**IMPORTANT: Generate ONLY the report content. Start the report with a clear title formatted as a Markdown H1 (`# Title`), reflecting the 'overall_goal' from the writing plan. Immediately follow the title with the first section or introduction as specified in the plan. Do NOT include any conversational text, preamble, or self-description before the report title.**
 """
 
 # For Initial Draft Generation
@@ -155,6 +210,7 @@ Writing Plan:
 ```
 
 Source Materials:
+Each item below is presented with its unique citation number, e.g., [rank].
 {formatted_summaries}
 
 ---
@@ -170,75 +226,57 @@ For this analysis:
 
 Follow the writing plan structure while ensuring balanced treatment of all relevant aspects. Draw exclusively from the provided source materials, maintaining scientific objectivity. Present technical concepts accurately while keeping the analysis accessible to an informed but not necessarily specialized audience.
 
+**Remember to insert `[[CITATION:rank]]` markers after specific information drawn from the sources.**
+
 Report Draft:
 """
 
+# --- Helper Function to Format Summaries/Chunks for Prompts ---
 def format_summaries_for_prompt(source_materials: list[Dict[str, Any]]) -> str:
-    """Formats summaries/chunks for the writer prompt, grouping by original source URL and assigning unique citation numbers."""
+    """
+    Formats summaries/chunks for the writer prompt, displaying each item
+    with its unique rank for citation purposes.
+
+    Args:
+        source_materials: List of dictionaries, each representing a summary or chunk
+                          with a 'rank', 'link', 'title', and 'content'.
+
+    Returns:
+        A formatted string representation of the source materials for the LLM prompt.
+    """
     if not source_materials:
         return "No source materials available."
-    
-    grouped_sources = defaultdict(lambda: {"summaries": [], "chunks": [], "title": "Untitled", "first_seen_order": float('inf')})
-    link_order = []
-
-    # Group by link, store original title, track order, separate summaries/chunks
-    for idx, item in enumerate(source_materials):
-        # Try to get link using various possible key names
-        link = item.get('link') or item.get('url')
-        if not link: continue # Skip items without links
-
-        group = grouped_sources[link]
-        if link not in link_order:
-            link_order.append(link)
-            group["title"] = item.get('title', 'Untitled')
-            # Use original index to maintain relative order for items processed concurrently
-            group["first_seen_order"] = idx 
-
-        item_type = item.get('type', 'unknown')
-        content = item.get('content') or item.get('chunk_content') or item.get('summary_content')
-        score = item.get('score') # Optional score for chunks
-
-        if content:
-            data = {"content": content}
-            if score is not None: data["score"] = score
-            
-            if item_type == 'summary':
-                group["summaries"].append(data)
-            elif item_type == 'chunk':
-                group["chunks"].append(data)
-            else: # Handle older format or unexpected types
-                 # Try to guess if it looks like a summary or chunk based on keys
-                 if 'summary' in item: group["summaries"].append({"content": item['summary']})
-                 elif 'chunk_content' in item: group["chunks"].append(data)
-                 else: group["summaries"].append({"content": str(item)}) # Fallback
 
     formatted_output = []
-    # Sort links by the order they were first encountered
-    sorted_links = sorted(link_order, key=lambda l: grouped_sources[l]["first_seen_order"])
+    # Sort by rank to ensure consistent order in the prompt
+    # Items should already be ranked sequentially by _assemble_writer_context
+    sorted_materials = sorted(source_materials, key=lambda x: x.get('rank', float('inf')))
 
-    # Assign citation numbers based on sorted order
-    for i, link in enumerate(sorted_links):
-        citation_marker = f"[{i+1}]"
-        group = grouped_sources[link]
-        title = group["title"]
-        
-        source_header = f"Source {citation_marker}: {title} ({link})"
+    for item in sorted_materials:
+        rank = item.get('rank')
+        link = item.get('link') # Should be string
+        title = item.get('title', 'Untitled')
+        content = item.get('content', 'N/A')
+        item_type = item.get('type', 'Unknown') # 'summary' or 'chunk'
+        score = item.get('score') # For chunks
+
+        if rank is None or link is None:
+            # Log this? Skip this? For now, skip if rank/link missing.
+            continue
+
+        # Header for each item using its rank
+        source_header = f"[{rank}] {title} ({link})"
         formatted_output.append(source_header)
-        
-        # Display Summaries first
-        if group["summaries"]:
-            # Typically expect only one summary per source
-            formatted_output.append(f"  Summary: {group['summaries'][0]['content']}")
-        
-        # Then display relevant Chunks, potentially sorted by score if available
-        if group["chunks"]:
-            formatted_output.append("  Relevant Chunks:")
-            # Sort chunks by score descending if scores exist, otherwise keep order
-            sorted_chunks = sorted(group["chunks"], key=lambda c: c.get('score', 0), reverse=True)
-            for chunk_data in sorted_chunks:
-                score_str = f" (Score: {chunk_data['score']:.2f})" if 'score' in chunk_data else ""
-                formatted_output.append(f"    - Chunk{score_str}: {chunk_data['content']}")
-                
+
+        # Display content (summary or chunk)
+        if item_type == 'summary':
+            formatted_output.append(f"  Summary: {content}")
+        elif item_type == 'chunk':
+            score_str = f" (Score: {score:.2f})" if score is not None else ""
+            formatted_output.append(f"  Relevant Chunk{score_str}: {content}")
+        else:
+            formatted_output.append(f"  Content: {content}") # Fallback
+
     return "\n\n".join(formatted_output)
 
 def get_writer_initial_prompt(user_query: str, writing_plan: dict, source_materials: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -284,9 +322,11 @@ Previously Generated Draft:
 ```
 
 *New* Source Materials (to address the request for more info on '{refinement_topic}'):
+Each item below is presented with its unique citation number, e.g., [rank].
 {formatted_new_summaries}
 
 All Available Source Materials (Initial + Previous Refinements):
+Each item below is presented with its unique citation number, e.g., [rank].
 {formatted_all_summaries}
 
 ---
@@ -306,26 +346,6 @@ If necessary, you may use the `<search_request query="...">` tag again if *absol
 
 Revised Report Draft:
 """
-
-def format_summaries_for_prompt_with_offset(summaries: list[dict[str, str]], offset: int) -> str:
-    """Formats *new* summaries for the refinement prompt context block, using an index offset.
-       NOTE: This is ONLY for displaying the NEW summaries concisely in the prompt. 
-             The main `formatted_all_summaries` uses the standard grouped formatting.
-    """
-    if not summaries:
-        return "No new summaries available for this topic."
-    
-    formatted = []
-    for i, summary_info in enumerate(summaries):
-        # Create numerical citation marker with offset - This marker might not directly correspond 
-        # to the final citation if the source was already seen, but gives context.
-        context_marker = f"(New Context Item [{offset + i + 1}])"
-        title = summary_info.get('title', 'Untitled')
-        link = summary_info.get('link', '#')
-        summary = summary_info.get('summary', 'No summary content.')
-        formatted.append(f"{context_marker} Title: {title} ({link})\nSummary: {summary}")
-    
-    return "\n\n".join(formatted)
 
 def get_writer_refinement_prompt(
     user_query: str,
@@ -350,9 +370,10 @@ def get_writer_refinement_prompt(
         A list of messages suitable for litellm.completion.
     """
     # Format the summaries with their correct numerical indices based on the FULL list
-    # Find the starting index for new summaries within the all_summaries list
-    start_index_new = len(all_summaries) - len(new_summaries)
-    formatted_new_summaries_str = format_summaries_for_prompt_with_offset(new_summaries, start_index_new)
+    # The `format_summaries_for_prompt` function now handles displaying ranks correctly for all items.
+    # We just need to format the 'new_summaries' list separately for its dedicated section in the prompt.
+    # `format_summaries_for_prompt` handles displaying rank for each item.
+    formatted_new_summaries_str = format_summaries_for_prompt(new_summaries)
     formatted_all_summaries_str = format_summaries_for_prompt(all_summaries) # All summaries use standard formatting
     writing_plan_str = json.dumps(writing_plan, indent=2)
     
@@ -373,27 +394,3 @@ def get_writer_refinement_prompt(
 
 # Ensure the helper function is available for the agent
 format_summaries_for_prompt_template = format_summaries_for_prompt
-
-# --- Refiner Prompt --- 
-# REMOVED - This role is being consolidated into iterative calls to the Writer LLM
-# using get_writer_refinement_prompt but potentially with a different LLM config.
-
-# _REFINER_SYSTEM_PROMPT = \
-# """
-# ... (removed content) ...
-# """
-
-# _REFINER_USER_MESSAGE_TEMPLATE = \
-# """
-# ... (removed content) ...
-# """
-
-# def get_refiner_prompt(
-#     previous_draft: str,
-#     search_query: str,
-#     new_info: list[Dict[str, Any]] # Updated type hint
-# ) -> list[dict[str, str]]:
-#    """Generates the message list for the Refiner LLM.""" 
-#     # ... (removed function body) ...
-
-# --- End of File --- 

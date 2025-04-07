@@ -114,3 +114,6 @@ ENV/
 .vscode/ 
 
 /downloaded_pdfs/*
+
+#firebase key
+odr-key.json

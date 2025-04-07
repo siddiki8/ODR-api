@@ -17,7 +17,7 @@ logger = logging.getLogger("WebSocketClient")
 WEBSOCKET_URL = "ws://localhost:8000/ws/research"
 # Sample research request payload
 RESEARCH_PAYLOAD = {
-    "query": "Compare the environmental and economic sustainability of various carbon capture technologies (direct air capture, bioenergy with carbon capture, enhanced weathering, and ocean-based methods), analyzing their scalability, cost-effectiveness, and potential ecological impacts based on peer-reviewed literature.",
+    "query": "Provide a comparative analysis of grid-scale energy storage technologies, specifically lithium-ion batteries, pumped hydro storage, compressed air energy storage (CAES), and flow batteries. Evaluate each based on technical performance (efficiency, lifespan, energy density), economic viability (capital cost, levelized cost of storage), environmental impact (lifecycle emissions, material sourcing), and suitability for grid integration, drawing from recent peer-reviewed literature and industry reports.",
     # Optional: Add other ResearchRequest fields here if needed for testing
     # e.g., max_search_tasks: 5, llm_provider: 'google'
     # "planner_llm_config": null,
@@ -28,6 +28,7 @@ RESEARCH_PAYLOAD = {
 async def run_research_client():
     """Connects to the WebSocket server, sends a request, and prints updates."""
     logger.info(f"Attempting to connect to WebSocket: {WEBSOCKET_URL}")
+    final_report_content = None # Variable to store the report content
     try:
         async with websockets.connect(WEBSOCKET_URL) as websocket:
             logger.info("WebSocket connection established.")
@@ -38,7 +39,7 @@ async def run_research_client():
             await websocket.send(request_payload_str)
             logger.info("Request sent.")
 
-            # 2. Listen for and print status updates
+            # 2. Listen for and process status updates
             logger.info("Waiting for status updates from the server...")
             try:
                 while True:
@@ -46,13 +47,22 @@ async def run_research_client():
                     try:
                         message_data = json.loads(message_str)
                         logger.info(f"Received update: {message_data}")
-                        # Optional: Check for the 'COMPLETE' step to potentially exit early
-                        if message_data.get("step") == "COMPLETE" and message_data.get("status") == "END":
+                        
+                        step = message_data.get("step")
+                        status = message_data.get("status")
+                        details = message_data.get("details", {})
+
+                        # Store final report if found in FINALIZING step
+                        if step == "FINALIZING" and "final_report" in details:
+                            final_report_content = details["final_report"]
+                            logger.info("Found potential final report content in FINALIZING step.")
+
+                        # Check for completion
+                        if step == "COMPLETE" and status == "END":
                             logger.info("Received 'COMPLETE' message. Processing final report...")
                             # --- Save Final Report --- #
                             try:
-                                report_content = message_data.get("details", {}).get("final_report")
-                                if report_content:
+                                if final_report_content:
                                     # Create a reports directory if it doesn't exist
                                     output_dir = "./research_reports"
                                     os.makedirs(output_dir, exist_ok=True)
@@ -65,25 +75,25 @@ async def run_research_client():
                                     filepath = os.path.join(output_dir, filename)
 
                                     with open(filepath, 'w', encoding='utf-8') as f:
-                                        f.write(report_content)
+                                        f.write(final_report_content)
                                     logger.info(f"Final report saved to: {filepath}")
                                 else:
-                                     logger.warning("'COMPLETE' message received, but no 'final_report' found in details.")
+                                     logger.warning("'COMPLETE' message received, but no 'final_report' found in preceding FINALIZING messages.")
                             except Exception as save_e:
                                 logger.error(f"Failed to save the final report: {save_e}", exc_info=True)
                             # ------------------------- #
                             break # Exit loop after processing COMPLETE
-                        elif message_data.get("step") == "ERROR": # Check for general ERROR step
-                             error_status = message_data.get("status", "ERROR") # e.g., ERROR, FATAL
-                             logger.error(f"Received 'ERROR' message: {message_data.get('message', '')} Details: {message_data.get('details')}")
-                             logger.warning("Closing connection due to server error.")
+                        
+                        # Check for fatal error
+                        elif step == "ERROR" and status == "FATAL":
+                             logger.error(f"Received FATAL 'ERROR' message: {message_data.get('message', '')} Details: {details}")
+                             logger.warning("Closing connection due to server FATAL error.")
                              break
 
                     except json.JSONDecodeError:
                         logger.warning(f"Received non-JSON message: {message_str}")
                     except Exception as e:
                         logger.error(f"Error processing received message: {e}", exc_info=True)
-
 
             except websockets.exceptions.ConnectionClosedOK:
                 logger.info("Server closed the connection normally.")

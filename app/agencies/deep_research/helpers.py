@@ -1,6 +1,7 @@
 import logging
 from typing import List, Optional, Dict, Any, Union
 from pydantic import HttpUrl
+import re
 
 # --- Internal Imports ---
 from app.core.exceptions import ScrapingError, ConfigurationError, SearchAPIError, RankingAPIError, ChunkingError
@@ -368,3 +369,67 @@ async def batch_scrape_urls_helper(
     except Exception as e:
         logger.error(f"Unexpected error during batch scraping helper execution: {e}", exc_info=True)
         return {url: ExtractionResult(source_url=url, status="error", error_message=f"Batch helper error: {e}") for url in urls}
+
+
+# --- Citation Processing Helpers (for Orchestrator Step 6) --- #
+
+def format_report_citations(report_content: str, logger: logging.Logger) -> str:
+    """Replaces [[CITATION:num1,num2]] markers with clickable Markdown links.
+
+    Args:
+        report_content: The content of the report.
+        logger: Logger instance for logging warnings and errors.
+
+    Returns:
+        The processed content with clickable citation links.
+    """
+    def replace_citation_marker(match):
+        numbers_str = match.group(1)
+        links = []
+        for num_str in map(str.strip, numbers_str.split(',')):
+            if num_str.isdigit():
+                links.append(f"[{num_str}](#ref-{num_str})")
+            else:
+                logger.warning(f"Found non-digit citation number '{num_str}' in marker: {match.group(0)}")
+                links.append(f"[{num_str}]") # Include as non-link
+        return ", ".join(links)
+
+    citation_pattern = r"\[\[CITATION:(\d+(?:s*,\s*\d+)*)\]\]"
+    try:
+        processed_content = re.sub(citation_pattern, replace_citation_marker, report_content)
+        logger.info("Processed report content to add clickable citation links.")
+        return processed_content
+    except Exception as regex_err:
+        logger.error(f"Error processing citation links with regex: {regex_err}", exc_info=True)
+        return report_content # Fallback to original content
+
+def generate_reference_list(unique_sources: Dict[str, Dict[str, Any]], logger: logging.Logger) -> str:
+    """Generates a Markdown formatted reference list with HTML anchors.
+
+    Args:
+        unique_sources: A dictionary mapping source URLs to their metadata.
+        logger: Logger instance for logging warnings and errors.
+
+    Returns:
+        The generated reference list content.
+    """
+    reference_list_content = "\n\n## References\n\n"
+    if unique_sources:
+        try:
+            # Sort sources by their assigned reference number
+            sorted_sources = sorted(unique_sources.values(), key=lambda item: item['ref_num'])
+            for source_info in sorted_sources:
+                ref_num = source_info['ref_num']
+                title = source_info.get('title', 'Unknown Title')
+                link = source_info.get('link', '#')
+                # Add HTML anchor tag before the number (Fixed f-string)
+                reference_list_content += f"<a name=\"ref-{ref_num}\"></a>{ref_num}. {title} ({link})\n"
+            logger.info(f"Generated reference list with {len(sorted_sources)} unique sources and anchors.")
+        except Exception as e:
+            logger.error(f"Failed during reference list generation: {e}", exc_info=True)
+            # Return a minimal list or indicate error?
+            reference_list_content += "*Error generating reference list.*\n"
+    else:
+        logger.info("No unique sources were processed to generate a reference list.")
+        reference_list_content += "*No sources cited.*\n"
+    return reference_list_content

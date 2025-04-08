@@ -147,7 +147,7 @@ SYNTHESIS STRATEGY:
 DATA PRESENTATION:
 - Present numerical data consistently (units, significant figures, etc.)
 - Use tables to compare related statistics from multiple sources when appropriate
-- Put findings in context (e.g., "10% increase" → "10% increase from 2010 baseline")
+- Put findings in context (e.g., "10% increase" -> "10% increase from 2010 baseline")
 - Note uncertainty or confidence intervals when provided
 
 INFORMATION GAPS:
@@ -157,15 +157,15 @@ INFORMATION GAPS:
 
 Follow the provided writing plan precisely, including the overall goal, tone, section structure, and specific guidance for each section. Ensure balanced coverage of all aspects of the query.
 
-**Focus on drawing information and insights solely from the provided source materials listed below.** Each source item (summary or chunk) is identified by a unique number in square brackets, e.g., `[1]`, `[2]`.
+**Focus on drawing information and insights solely from the provided source materials listed below.** Each source item (summary or chunk) is identified by a unique *reference number* in square brackets in its header, e.g., `[1]`, `[2]`.
 
 **CITATIONS:**
 - When you present a specific fact, statistic, finding, or direct claim from a source, you MUST indicate its origin using a citation marker.
 - Insert the marker *immediately* after the information, before any punctuation (like periods or commas).
-- Use the format `[[CITATION:rank]]` where `rank` is the number corresponding to the source item in the 'Source Materials' list (e.g., `[[CITATION:1]]`, `[[CITATION:3]]`).
-- If a single piece of information is supported by multiple sources, list all relevant ranks separated by commas: `[[CITATION:1, 2, 5]]`.
+- Use the format `[[CITATION:ref_num]]` where `ref_num` is the *reference number* corresponding to the source item found in its header in the 'Source Materials' list (e.g., `[[CITATION:1]]`, `[[CITATION:3]]`).
+- If a single piece of information is supported by multiple sources, list all relevant reference numbers separated by commas: `[[CITATION:1, 2, 5]]`.
 - **Cite appropriately:** Prioritize citing specific data points, direct quotes (though avoid overuse), key findings, and controversial claims. Avoid over-citing common knowledge established across multiple sources or highly synthesized statements unless attributing a specific nuanced point.
-- A final, numbered list of sources corresponding to these ranks will be added automatically later.
+- A final, numbered list of sources corresponding to these reference numbers will be added automatically later.
 
 Maintain a logical flow with clear transitions between sections. Organize complex information into digestible components while preserving important technical details. **Use Markdown formatting (like tables, code blocks, lists, bolding) to enhance clarity and structure.** Ensure the report directly addresses all aspects of the original user query.
 
@@ -173,7 +173,7 @@ Maintain a logical flow with clear transitions between sections. Organize comple
 
 ```json
 {{
-  "report_content": "# Report Titlenn## Section 1 TitlennReport content in Markdown format... with [[CITATION:rank]] markers as specified...",
+  "report_content": "# Report Titlenn## Section 1 TitlennReport content in Markdown format... with [[CITATION:ref_num]] markers as specified...",
   "requested_searches": [
     {{
       "query": "Specific search query needed to fill a critical information gap.",
@@ -195,25 +195,10 @@ Writing Plan:
 ```
 
 Source Materials:
-Each item below is presented with its unique citation number, e.g., [rank].
+Each item below is presented with its unique reference number in its header, e.g., [1]. Use this number for citations like [[CITATION:1]].
 {formatted_summaries}
 
----
-
-Your task is to write a comprehensive research report addressing the query: "{user_query}"
-
-For this analysis:
-1. Critically evaluate the evidence for both approaches mentioned in the query
-2. Assess methodological strengths and limitations based on the provided materials 
-3. Compare efficacy metrics and performance when available
-4. Analyze potential biases in each approach as documented in the literature
-5. Identify scenarios where each approach excels or faces challenges
-
-Follow the writing plan structure while ensuring balanced treatment of all relevant aspects. Draw exclusively from the provided source materials, maintaining scientific objectivity. Present technical concepts accurately while keeping the analysis accessible to an informed but not necessarily specialized audience.
-
-**Remember to insert `[[CITATION:rank]]` markers after specific information drawn from the sources.**
-
-Report Draft:
+Please generate the research report based *only* on the Writing Plan and the Source Materials provided above.
 """
 
 
@@ -228,88 +213,64 @@ Writing Plan:
 {writing_plan_json}
 ```
 
-Previously Generated Draft:
-```
+Previous Draft:
+```markdown
 {previous_draft}
 ```
 
-*New* Source Materials (to address the request for more info on '{refinement_topic}'):
-Each item below is presented with its unique citation number, e.g., [rank].
+Refinement Topic/Request: The previous draft was missing information related to '{refinement_topic}'. New source materials focusing on this topic have been gathered.
+
+Newly Added Source Materials:
+Each item below is presented with its unique reference number in its header, e.g., [3]. Use this number for citations like [[CITATION:3]].
 {formatted_new_summaries}
 
----
+Please revise the 'Previous Draft' based *only* on the 'Newly Added Source Materials'. Focus on incorporating the new information relevant to the '{refinement_topic}' into the existing structure, following the Writing Plan.
+- Integrate the new findings smoothly into the relevant sections.
+- Ensure you add citations `[[CITATION:ref_num]]` for all new information using the reference numbers provided with the new materials.
+- If the new information contradicts or significantly modifies existing statements, update the draft accordingly, maintaining logical consistency.
+- If the new information fills a previously identified gap, ensure the relevant section is now complete.
+- You may need to restructure sentences or paragraphs to accommodate the new information naturally.
+- Do *not* remove existing content or citations unless the new information directly refutes it or makes it redundant.
+- If the new information still doesn't fully address the refinement topic or reveals further critical gaps, you may request additional searches.
 
-Please revise the previous draft to incorporate critical information from the new source materials about '{refinement_topic}'. 
-
-When integrating this information:
-1. Maintain the analytical depth and balance of the existing draft
-2. Update any sections where new material provides stronger evidence or contradicts previous assertions
-3. Add nuance where the new materials illuminate gaps or limitations in the previous analysis
-4. Ensure the logical flow and structure remain coherent after incorporating new information
-5. Maintain focus on the original query comparing both approaches for efficacy and bias
-
-Integrate the new information smoothly into the existing structure defined by the writing plan while preserving the scholarly tone and comprehensive nature of the analysis. Prioritize factual accuracy and balanced treatment of all perspectives represented in the sources.
-
-If necessary, you may request *additional* searches using the `requested_searches` field in the JSON output if, even with the new information, *absolutely critical* data for fulfilling the plan is still missing. Avoid requesting searches if possible.
-
-**Remember to output ONLY the JSON object containing the revised report and any essential search requests.**
-
-Revised Report JSON:
+Output the *complete, revised report* in the standard JSON format, potentially including new search requests if necessary.
 """
 
 
-# --- Helper Function to Format Summaries/Chunks for Prompts (Kept from prompts.py) ---
+# --- Helper Function for Formatting Context ---
+# Updated to use 'source_ref_num' instead of 'rank'
+
 def format_summaries_for_prompt(source_materials: list[Dict[str, Any]]) -> str:
     """
-    Formats summaries/chunks for the writer prompt, grouping items by their
-    source URL rank and displaying each unique source with its rank once.
-
-    Args:
-        source_materials: List of dictionaries, each representing a summary or chunk
-                          with a 'rank' (based on unique URL), 'link', 'title', and 'content'.
-                          The list MUST be pre-sorted by rank for correct grouping.
-
-    Returns:
-        A formatted string representation of the source materials for the LLM prompt.
+    Formats the collected source materials (summaries and chunks) for inclusion 
+    in the Writer or Refiner agent prompts.
+    Uses 'source_ref_num' for stable citation identification.
     """
-    if not source_materials:
-        return "No source materials available."
+    formatted_string = ""
+    for i, item in enumerate(source_materials):
+        ref_num = item.get('source_ref_num', f"MISSING_REF_{i+1}") # Use stable ref num
+        title = item.get('title', 'Unknown Title')
+        link = item.get('link', '#')
+        content = item.get('content', '').strip()
+        material_type = item.get('type', 'unknown') # e.g., 'summary' or 'chunk'
+        score = item.get('score') # For reranked chunks
 
-    formatted_output = []
-    last_rank = -1
+        # Header for each item using the reference number
+        formatted_string += f"--- Source Material [{ref_num}] ---\n"
+        formatted_string += f"Title: {title}\n"
+        formatted_string += f"Link: {link}\n"
+        formatted_string += f"Type: {material_type}"
+        if score is not None:
+             score_str = f"{score:.4f}" if isinstance(score, float) else str(score)
+             formatted_string += f" (Relevance Score: {score_str})"
+        formatted_string += "\n"
+        formatted_string += f"Content:\n{content}\n"
+        formatted_string += f"--- End Source Material [{ref_num}] ---\n\n"
 
-    # Assumes source_materials is sorted by rank (as done in _assemble_writer_context)
-    for item in source_materials:
-        rank = item.get('rank')
-        link = item.get('link')
-        title = item.get('title', 'Untitled')
-        content = item.get('content', 'N/A')
-        item_type = item.get('type', 'Unknown')
-        score = item.get('score')
+    if not formatted_string:
+        return "No source materials provided.\n"
 
-        if rank is None or link is None:
-            continue # Skip items missing essential info
-
-        # Check if this is a new source rank
-        if rank != last_rank:
-            if last_rank != -1:
-                formatted_output.append("n") # Add space between sources
-            source_header = f"[{rank}] {title} ({link})"
-            formatted_output.append(source_header)
-            last_rank = rank
-
-        # Add the content (summary or chunk) under the current source header
-        if item_type == 'summary':
-            # Prepend "Summary:" only if there are also chunks for this source, or if it's the only item
-            # To simplify, let's always prepend "Summary:" for clarity
-            formatted_output.append(f"  Summary: {content}")
-        elif item_type == 'chunk':
-            score_str = f" (Score: {score:.2f})" if score is not None else ""
-            formatted_output.append(f"  Relevant Chunk{score_str}: {content}")
-        else:
-            formatted_output.append(f"  Content: {content}") # Fallback
-
-    return "n".join(formatted_output) # Use single newline for tighter packing in prompt
+    return formatted_string.strip()
 
 
 # --- Define OpenRouter Models --- 
@@ -345,7 +306,8 @@ def create_planner_agent(config: DeepResearchConfig) -> Agent:
     ](
         model=planner_model,
         system_prompt=_PLANNER_SYSTEM_PROMPT,
-        result_type=schemas.PlannerOutput
+        result_type=schemas.PlannerOutput,
+        retries=3
     )
 
 def create_summarizer_agent(config: DeepResearchConfig) -> Agent:
@@ -356,7 +318,8 @@ def create_summarizer_agent(config: DeepResearchConfig) -> Agent:
     return Agent[str](
         model=summarizer_model,
         system_prompt=_SUMMARIZER_SYSTEM_PROMPT,
-        result_type=str
+        result_type=str,
+        retries=3
     )
 
 def create_writer_agent(config: DeepResearchConfig) -> Agent:
@@ -368,7 +331,8 @@ def create_writer_agent(config: DeepResearchConfig) -> Agent:
         model=writer_model,
         system_prompt=_WRITER_SYSTEM_PROMPT_BASE,
         deps_type=None,
-        result_type=schemas.WriterOutput
+        result_type=schemas.WriterOutput,
+        retries=3
     )
 
 def create_refiner_agent(config: DeepResearchConfig) -> Agent:
@@ -383,7 +347,8 @@ def create_refiner_agent(config: DeepResearchConfig) -> Agent:
         model=refiner_model,
         system_prompt=_REFINEMENT_SYSTEM_PROMPT,
         deps_type=None,
-        result_type=schemas.WriterOutput
+        result_type=schemas.WriterOutput,
+        retries=3
     )
 
 # Structure to hold all agents for the agency
@@ -415,11 +380,11 @@ def get_agency_agents(config: DeepResearchConfig) -> AgencyAgents:
     @writer.result_validator
     @refiner.result_validator
     async def validate_citations_present(ctx: RunContext[None], result: schemas.WriterOutput) -> schemas.WriterOutput:
-        """Validates that the report content includes [[CITATION:rank]] markers."""
+        """Validates that the report content includes [[CITATION:source_ref_num]] markers."""
         citation_pattern = r"\[\[CITATION:\d+(,\d+)*\]\]"
         if not result.report_content or not re.search(citation_pattern, result.report_content):
             logger.warning(f"Validation failed: Report missing citation markers. Requesting retry {ctx.retry + 1}.")
-            raise ModelRetry("The generated report is missing mandatory citation markers like [[CITATION:1]] or [[CITATION:1,2]]. Please revise the report to include citations for specific facts, findings, and claims derived from the source materials provided.")
+            raise ModelRetry("The generated report is missing mandatory citation markers like [[CITATION:1]] or [[CITATION:1,2]]. Please revise the report to include citations using the reference numbers provided in the source material headers (e.g., [1], [2]).")
         logger.debug(f"Validation passed: Citations found.")
         return result
 

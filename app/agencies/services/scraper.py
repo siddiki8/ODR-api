@@ -399,25 +399,37 @@ class WebScraper:
             # Use a shared crawler instance for concurrent runs
             async with AsyncWebCrawler(config=self.browser_config) as shared_crawler:
                 tasks = [self.scrape(url, crawler=shared_crawler) for url in urls]
-                scrape_results = await asyncio.gather(*tasks, return_exceptions=True)
+                # This gathers results OR exceptions
+                scrape_results_or_errors = await asyncio.gather(*tasks, return_exceptions=True)
 
-                for i, result_or_exc in enumerate(scrape_results):
-                    url = urls[i]
-                    if isinstance(result_or_exc, ExtractionResult):
-                        results[url] = result_or_exc
-                    elif isinstance(result_or_exc, Exception):
-                        logger.error(f"Concurrent scraping task for {url} failed with exception: {result_or_exc}", exc_info=False) # Don't log full trace for gather errors
-                        results[url] = ExtractionResult(
-                            content=None,
-                            source_url=url,
-                            status="error",
-                            error_message=f"Scraping task failed: {result_or_exc}",
-                            extraction_source="scrape_many_gather_error"
-                        )
-                    else:
-                        # Should not happen with return_exceptions=True
-                        logger.error(f"Unexpected item in asyncio.gather results for {url}: {result_or_exc}")
-                        results[url] = ExtractionResult(content=None, source_url=url, status="error", error_message="Unexpected result type from gather")
+            # Process the results from asyncio.gather
+            for i, result_or_error in enumerate(scrape_results_or_errors):
+                original_url = urls[i] # Get the URL corresponding to this result
+                if isinstance(result_or_error, ExtractionResult):
+                    results[original_url] = result_or_error
+                    # Log success/empty status from the result itself
+                    if result_or_error.status == 'success':
+                        logger.debug(f"Concurrent scrape successful for {original_url}")
+                    elif result_or_error.status == 'empty':
+                        logger.warning(f"Concurrent scrape yielded empty content for {original_url}")
+                elif isinstance(result_or_error, Exception):
+                    logger.error(f"Concurrent scrape failed for {original_url}: {result_or_error}", exc_info=False) # exc_info=False as gather already captured it
+                    # Create an error ExtractionResult
+                    results[original_url] = ExtractionResult(
+                        source_url=original_url,
+                        status="error",
+                        error_message=f"Scraping failed: {str(result_or_error)}",
+                        extraction_source="concurrent_gather_exception"
+                    )
+                else:
+                    # Should not happen with return_exceptions=True, but handle defensively
+                    logger.error(f"Unexpected item type returned from asyncio.gather for {original_url}: {type(result_or_error)}")
+                    results[original_url] = ExtractionResult(
+                        source_url=original_url,
+                        status="error",
+                        error_message=f"Unexpected result type: {type(result_or_error)}",
+                        extraction_source="concurrent_gather_unexpected_type"
+                    )
 
         logger.info(f"Finished scraping {len(urls)} URLs.")
         return results 

@@ -137,7 +137,7 @@ async def rerank_with_together_api(
                         logger.debug(f"Filtering out document index {index} with score {score_float:.4f} (below threshold {relevance_threshold})")
 
                 # Defensive sort: ensure results are sorted by score (API usually does this)
-                formatted_results.sort(key=lambda x: x['score'], reverse=True)
+                formatted_results.sort(key=lambda x: x.score, reverse=True)
 
                 logger.info(f"Reranking complete. Returning {len(formatted_results)} documents above threshold {relevance_threshold}.")
                 return formatted_results # Success!
@@ -147,11 +147,14 @@ async def rerank_with_together_api(
             logger.warning(f"Rerank Attempt {attempt + 1} failed (Retryable Network Error): {type(e).__name__}: {e}")
         except httpx.HTTPStatusError as e:
             last_exception = e
-            # Retry only on 5xx server errors
+            # Retry on 5xx server errors AND 429 rate limit errors
             if 500 <= e.response.status_code <= 599:
                 logger.warning(f"Rerank Attempt {attempt + 1} failed (Retryable Server Error {e.response.status_code}): {e.response.text[:200]}...")
+            elif e.response.status_code == 429:
+                logger.warning(f"Rerank Attempt {attempt + 1} failed (Rate Limit Error 429). Retrying...")
+                # Optionally parse retry-after header if present, but simple backoff is fine too
             else:
-                # Non-retryable client error (4xx) or other status
+                # Non-retryable client error (other 4xx) or other status
                 response_text = e.response.text
                 logger.error(f"Together Rerank API request failed with non-retryable status {e.response.status_code}: {response_text}", exc_info=False)
                 raise RankingAPIError(f"Together Rerank API returned status {e.response.status_code}: {response_text}") from e

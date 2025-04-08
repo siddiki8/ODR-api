@@ -5,6 +5,7 @@ uvicorn[standard]>=0.20.0
 # Pydantic (including settings management)
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
+pydantic-ai
 
 # Environment variables
 python-dotenv>=1.0.0
@@ -32,3 +33,6 @@ markdown>=3.5.1
 
 #database
 firebase-admin
+
+# Tokenization
+tiktoken

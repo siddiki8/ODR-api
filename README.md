@@ -1,5 +1,4 @@
-# Open Deep Research API
-
+# Open Deep Research API Framework
 
 <a href="https://github.com/unclecode/crawl4ai">
   <img src="https://raw.githubusercontent.com/unclecode/crawl4ai/main/docs/assets/powered-by-dark.svg" alt="Powered by Crawl4AI" width="200"/>
@@ -12,96 +11,87 @@
 
 **Developed by [Luminary AI Solutions LLC](https://luminarysolutions.ai)**
 
-The Open Deep Research API provides a powerful, multi-step reasoning agent designed to perform in-depth research on complex queries. It leverages multiple Large Language Models (LLMs), web search, content scraping, and ranking techniques to generate comprehensive, cited reports streamed over WebSockets.
+**The Open Deep Research API Framework provides a powerful, modular, multi-agency foundation for building sophisticated AI-powered research systems.** Instead of a single monolithic application, this framework allows you to create distinct `Agencies` (e.g., Deep Research, Financial Analysis, Code Review), each orchestrating multiple specialized Large Language Model (LLM) `Agents`. Agencies leverage shared core `Services` for web search, advanced content scraping, chunking, and ranking to generate comprehensive, cited reports, often streamed over WebSockets.
+
+**Build Your Own Research AI!** This framework is designed for extension. Easily add new agencies, agents, or services to tackle diverse research domains.
 
 ## ✨ Features
 
-*   **Multi-Step Agent Workflow:** Orchestrates planning, searching, scraping, summarizing, chunking, writing, and refining steps.
-*   **LLM Integration via LiteLLM:** Supports various LLM providers (OpenAI, Google Gemini, OpenRouter, etc.) through [LiteLLM](https://github.com/BerriAI/litellm) for planning, summarization, writing, and refinement.
-*   **Web Search:** Integrates with [Serper](https://serper.dev/) for efficient and targeted web searches.
-*   **Advanced Content Scraping:** Uses [Crawl4AI](https://github.com/extractus/crawl4ai) for robust web scraping and Markdown conversion, augmented by specialized utilities (e.g., for PDFs, Wikipedia) in `app/services/scraping_utils/`.
-*   **Content Reranking:** Employs reranking models (via Together AI API) to prioritize the most relevant search results and text chunks.
-*   **Structured & Robust:** Leverages [Pydantic](https://docs.pydantic.dev/) extensively for data validation (API requests/responses, LLM outputs) and internal data structuring, ensuring reliability.
-*   **Asynchronous Streaming:** Provides real-time progress updates and the final report via a WebSocket endpoint (`/ws/research`).
-*   **Configurable:** Allows overriding default LLM models, API keys, and certain workflow parameters via environment variables and request payloads.
+*   **Highly Modular Design:** Built for extension! Easily add new specialized research `Agencies` (e.g., for finance, legal) in `app/agencies/` or enhance existing ones with new `Agents`.
+*   **Multi-Agency Architecture:** Organizes research tasks using specialized `Agencies`. Each agency runs independently with its own set of agents and orchestration logic.
+*   **Shareable Core Services:** Common tasks like web search (`app/services/search`), content scraping (`app/services/scraper`), text chunking (`app/services/chunking`), PDF handling (`app/services/scraping_utils`), and ranking (`app/agencies/services/ranking.py`) are isolated in `app/services/` or `app/agencies/services/`, ready to be reused by any agency.
+*   **Agency-Specific Orchestration:** Each agency defines its own workflow logic in its `orchestrator.py` file, allowing for diverse and complex research processes tailored to the domain.
+*   **Clear Agent Roles:** Agents within an agency typically have defined responsibilities (e.g., Planning, Summarizing, Writing, Refining), simplifying development, testing, and maintenance (`app/agencies/<agency_name>/agents.py`).
+*   **Structured LLM Interaction:** Leverages Pydantic (`app/core/schemas.py`, `app/agencies/<agency_name>/schemas.py`) to define clear input/output schemas for LLM agents, ensuring reliable and validated data flow.
+*   **Integrated Web Search:** Built-in support for [Serper](https://serper.dev/) (`app/services/search/serper_service.py`), easily adaptable for other providers.
+*   **Advanced Content Scraping:** Uses [Crawl4AI](https://github.com/extractus/crawl4ai) (`app/services/scraper/crawl4ai_scraper.py`) for robust web content extraction, including utilities for handling complex sites and formats like PDFs.
+*   **Content Reranking:** Employs reranking models (e.g., via Together AI API) to prioritize the most relevant search results and text chunks for LLM context (`app/agencies/services/ranking.py`, used by `helpers.py`).
+*   **Asynchronous Streaming:** Provides real-time progress updates via WebSockets (see `websocket_guide.md`).
+*   **Configurable:** Easily override default LLM models, API keys, and workflow parameters via environment variables (`app/core/config.py`) and API request payloads.
+*   **Optional State Persistence:** Can track task status and store final results using Firestore (`firestore_schema.md`).
 
-## ⚙️ Agent Workflow
+## 🏛️ Core Architecture Principles
 
-The core research process involves several orchestrated steps:
+The framework promotes modularity through a clear separation of concerns:
 
-1.  **Planning:**
-    *   Input: User Query
-    *   Action: A Planner LLM generates a `WritingPlan` (defining report structure) and a list of `SearchTask` objects based on the query.
-    *   Output: Validated `PlannerOutput` Pydantic model.
+1.  **Agencies (`app/agencies/<agency_name>/`)**: Self-contained units focused on a specific research domain. Each agency typically contains:
+    *   `orchestrator.py`: Defines the main workflow and sequence of steps for the agency.
+    *   `agents.py`: Implements the specialized LLM-powered agents (e.g., Planner, Writer) used in the orchestration.
+    *   `schemas.py`: Defines Pydantic models for the agency's specific data structures and agent outputs.
+    *   `prompts.py` (Optional): Stores prompts used by the agents.
+    *   `helpers.py` (Optional): Contains utility functions specific to the agency's workflow, often combining calls to shared services.
+2.  **Services (`app/services/`, `app/agencies/services/`)**: Reusable, often non-LLM components providing core functionalities like search, scraping, chunking, ranking, etc. These are designed to be stateless and callable by any agency's orchestrator or helpers.
+3.  **Core (`app/core/`)**: Contains application-wide configurations (`config.py`), common Pydantic schemas (`schemas.py`), exception handling (`exceptions.py`), and the FastAPI application setup (`main.py`).
+4.  **Pydantic Schemas**: Act as the "glue" defining the data contracts between agents, services, and the API layer, ensuring consistency and enabling validation.
 
-2.  **Initial Search:**
-    *   Input: `SearchTask` list from the Planner.
-    *   Action: Executes parallel searches using the Serper API.
-    *   Output: List of `SearchResult` objects.
+## ⚙️ Example Workflow: Deep Research Agency
 
-3.  **Reranking:**
-    *   Input: `SearchResult` list, User Query.
-    *   Action: Deduplicates results and reranks them using a relevance model (Together AI API). Splits results into high-relevance sources for summarization and lower-relevance sources for chunking.
-    *   Output: Two lists of `SearchResult` objects (`sources_to_summarize`, `sources_to_chunk`).
+The included `deep_research` agency (`app/agencies/deep_research/`) serves as an example implementation, orchestrating the following steps:
 
-4.  **Content Processing:**
-    *   Input: `sources_to_summarize`, `sources_to_chunk`, User Query.
-    *   Action:
-        *   For `sources_to_summarize`: Scrapes content (using Crawl4AI and `scraping_utils`), then uses a Summarizer LLM to generate concise summaries relevant to the query.
-        *   For `sources_to_chunk`: Scrapes content, divides it into `Chunk`s, and reranks the chunks for relevance against the query. Removes less relevant chunks.
-    *   Output: List of `SourceSummary` objects and list of relevant `Chunk` objects.
+1.  **Planning:** The `Planner` agent generates a `WritingPlan` and `SearchTasks`.
+2.  **Initial Search:** Calls the `SearchService`.
+3.  **Initial Reranking:** Uses the `RankingService` (via `helpers.py`) to prioritize results.
+4.  **Content Processing:** Calls `ScraperService` (via `helpers.py`), then uses `Summarizer` agent or `ChunkingService` + `RankingService` (via `helpers.py`).
+5.  **Initial Writing:** The `Writer` agent creates a draft using processed content, potentially requesting more info via `SearchRequest` tags.
+6.  **Refinement Loop:** Executes further searches if requested, processes new content, and uses the `Refiner` agent with *only new information* to update the draft iteratively.
+7.  **Final Assembly:** Formats citations and adds a reference list using helper functions.
+8.  **Response & Persistence:** Sends the final report and usage stats via WebSocket and saves to Firestore (if configured).
 
-5.  **Context Assembly:**
-    *   Input: `SourceSummary` list, `Chunk` list.
-    *   Action: Combines summaries and relevant chunks into a ranked list to provide context for the writer. Assigns citation ranks.
-    *   Output: Ranked list of context items (dictionaries).
-
-6.  **Initial Writing:**
-    *   Input: User Query, `WritingPlan`, Ranked Context Items.
-    *   Action: A Writer LLM generates the initial draft of the report based on the plan and provided context, incorporating citation markers `[N]`.
-    *   Output: Initial report draft (string).
-
-7.  **Refinement Loop (Iterative):**
-    *   Input: Current Draft, User Query, Writing Plan, Full List of Processed Source Materials (Summaries/Chunks).
-    *   Action:
-        *   Checks the draft for `<search_request query='...'>` tags indicating missing information.
-        *   If found: Executes a new search, processes new relevant sources (scraping, chunking, reranking), and adds the resulting relevant chunks to the full list of source materials, assigning new citation ranks.
-        *   Calls the **Writer LLM again** (using `get_writer_refinement_prompt`), providing the previous draft, the search query topic, and the **updated full list of source materials** with consistent citation markers. This call may use a different LLM configuration (e.g., the faster/cheaper summarizer model config) for efficiency.
-        *   Repeats up to a configured maximum number of iterations or until no search tags are found.
-    *   Output: Refined report draft (string), Updated Full List of Source Materials.
-
-8.  **Final Assembly:**
-    *   Input: Final Draft, Final Full List of Source Materials.
-    *   Action: Removes any remaining search tags and appends a "References" section based on the citation markers `[N]` found in the draft and the corresponding source links from the final context.
-    *   Output: Final report string with references.
-
-9.  **Response:**
-    *   Action: Sends the final report and detailed `UsageStatistics` (token counts, costs, API calls) via the WebSocket.
+This detailed workflow is specific to the `deep_research` agency; other agencies can implement entirely different processes while reusing the core services.
 
 ## 🛠️ Technology Stack
 
 *   **Framework:** [FastAPI](https://fastapi.tiangolo.com/)
-*   **Data Validation:** [Pydantic](https://docs.pydantic.dev/) V2
-*   **LLM Orchestration:** Custom Agent Logic
-*   **LLM Interaction:** [LiteLLM](https://github.com/BerriAI/litellm)
-*   **Web Scraping:** [Crawl4AI](https://github.com/extractus/crawl4ai)
-*   **PDF Parsing:** [MarkItDown](https://github.com/microsoft/markitdown) (via Crawl4AI or directly)
-*   **Web Search:** [Serper API](https://serper.dev/)
-*   **Reranking:** [Together AI API](https://www.together.ai/)
+*   **Data Validation & Settings:** [Pydantic](https://docs.pydantic.dev/) V2
+*   **LLM Interaction:** Primarily OpenAI API client (via libraries like `openai` or potentially routing services like OpenRouter), adaptable for others supporting structured output (JSON mode/Tool Calling). Pydantic enforces output structure.
+*   **Multi-Agency Orchestration:** Custom logic within `app/agencies/`
+*   **Web Scraping:** [Crawl4AI](https://github.com/extractus/crawl4ai) (via `app/services/scraper/`)
+*   **PDF Parsing:** [MarkItDown](https://github.com/microsoft/markitdown) (via Crawl4AI or directly in `app/services/scraping_utils/`)
+*   **Web Search:** [Serper API](https://serper.dev/) (via `app/services/search/`)
+*   **Reranking:** [Together AI API](https://www.together.ai/) (via `app/agencies/services/ranking.py`)
+*   **Chunking:** Custom implementation in `app/services/chunking/`
+*   **State Persistence (Optional):** Google Firestore
 *   **Language:** Python 3.10+
 *   **Async:** `asyncio`
 
 ## 💪 Robustness through Pydantic
 
-Pydantic plays a critical role in ensuring the API's reliability:
+Pydantic V2 is fundamental to the API's reliability and structure:
 
-*   **API Layer:** Validates incoming requests (`ResearchRequest`) and outgoing responses (`ResearchResponse`), ensuring adherence to the defined schema.
-*   **LLM Interaction:** Structures prompts and validates the *output* of LLM calls (e.g., `PlannerOutput` from the Planner LLM), catching formatting errors or unexpected responses early. LiteLLM's `response_model` parameter is used for direct parsing and validation.
-*   **Internal Data Flow:** Defines clear data structures (`SearchResult`, `Chunk`, `SourceSummary`, `UsageStatistics`, etc.) used throughout the agent's workflow, reducing errors caused by inconsistent data handling.
+*   **API Layer:** Validates incoming requests (`ResearchRequest`) and outgoing WebSocket messages (`WebSocketUpdateHandler`), ensuring schema adherence.
+*   **Configuration:** Manages application settings robustly (`app/core/config.py`).
+*   **LLM Interaction:** Defines precise Pydantic models (`app/agencies/deep_research/schemas.py`) used as the required output format for LLM agents (e.g., `PlannerOutput`, `WriterOutput`). This allows direct parsing and validation of agent responses, catching errors early.
+*   **Internal Data Flow:** Structures data passed between components (e.g., `SearchResult`, `Chunk`, `UsageStatistics` in `app/core/schemas.py`), reducing errors from inconsistent data handling.
 
-## 🧬 PydanticAI Integration (Development)
+## 🧬 Structured Output from LLMs
 
-[PydanticAI](https://github.com/jxnl/pydanticai) (or similar structured output libraries) influences our development process, particularly in designing prompts and validation schemas for LLM interactions. While not a direct runtime dependency for the core agent logic *currently*, the principles of structured prompting and output validation are key to the development and testing pipeline, aiming for more reliable LLM integrations.
+This project relies heavily on the ability of modern LLMs (like OpenAI's GPT series) to generate output conforming to a specified structure, particularly JSON schemas derived from Pydantic models.
+
+*   **Prompt Engineering:** Prompts for agents (`app/agencies/deep_research/agents.py`) include instructions and often JSON schema definitions or examples to guide the LLM.
+*   **API Features:** We utilize LLM API features (e.g., OpenAI's `response_format={"type": "json_object"}` and function/tool calling where appropriate) to encourage structured output.
+*   **Validation:** The Pydantic models defined in `schemas.py` act as the final validator. The application attempts to parse the LLM's string output directly into the target Pydantic model. If parsing fails, it indicates the LLM didn't adhere to the requested structure, and appropriate error handling or retries are triggered.
+
+This approach replaces the need for external libraries like LiteLLM solely for managing multiple providers, focusing instead on leveraging provider-specific features for reliable structured output generation guided by Pydantic schemas.
 
 ## 🚀 Installation
 
@@ -118,6 +108,7 @@ Pydantic plays a critical role in ensuring the API's reliability:
 3.  **Install dependencies:**
     ```bash
     pip install -r requirements.txt
+    playwright install --with-deps
     ```
 
 ## 🔧 Configuration
@@ -138,27 +129,14 @@ The API relies on environment variables for configuration, particularly API keys
     # Together AI API Key (Required for reranking)
     TOGETHER_API_KEY="your_together_api_key"
 
-    # LLM API Keys (Provide keys for the providers you intend to use)
-    OPENAI_API_KEY="your_openai_api_key"
-    GOOGLE_API_KEY="your_google_api_key" # For Gemini
-    OPENROUTER_API_KEY="your_openrouter_api_key"
+    # --- LLM API Keys ---
+    # Provide keys for the LLM providers you intend to use.
+    # Currently uses OpenAI client via OpenRouter, but architecture allows adding others.
+    OPENROUTER_API_KEY="your_openai_api_key"
 
-    # Optional: Override default models (defaults are in core/config.py)
-    # DEFAULT_PLANNER_MODEL="openai/gpt-4o-mini"
-    # DEFAULT_SUMMARIZER_MODEL="openai/gpt-4o-mini"
-    # DEFAULT_WRITER_MODEL="openai/gpt-4o"
-    # DEFAULT_RERANKER_MODEL="mixedbread-ai/mxbai-rerank-xsmall-v1"
-    # DEFAULT_LLM_PROVIDER="openai" # or 'google', 'openrouter'
-
-    # Optional: Specify OpenRouter base URLs if needed
-    # OPENROUTER_API_BASE="https://openrouter.ai/api/v1"
-
-    # Scraper settings
-    # SCRAPER_DOWNLOAD_PDFS=false
-    # SCRAPER_PDF_SAVE_DIR="./downloaded_pdfs"
-    # SCRAPER_MAX_PDF_SIZE_MB=50
-
-    # Other settings from AppSettings in core/config.py can be overridden here
+    # --- Firestore Configuration ---
+    # Required for task persistence - will work without.
+    FIREBASE_SERVICE_ACCOUNT_KEY_JSON="/path/to/your/service-account-key.json"
     ```
 
 ## ▶️ Usage
@@ -167,61 +145,81 @@ The API relies on environment variables for configuration, particularly API keys
     ```bash
     uvicorn app.main:app --reload --port 8000
     ```
-    The API will be available at `http://localhost:8000`.
+    The API will be available at `http://localhost:8000`. Access the interactive docs at `http://localhost:8000/docs`.
 
 2.  **Interact via WebSocket:**
-    *   The primary endpoint is `/ws/research`.
-    *   Connect using a WebSocket client (see `websocket_client.py` for an example).
-    *   Send an initial JSON message matching the `ResearchRequest` schema:
+    *   The primary endpoint for the deep research agency is `/deep_research/ws/research`.
+    *   Connect using a WebSocket client (see `ws_client.py` for a Python example - run with `python ws_client.py }your query here").
+    *   Send an initial JSON message matching the `ResearchRequest` schema (`app/core/schemas.py`):
         ```json
         {
           "query": "Your research query here",
-          "planner_llm_config": null, // Optional override
+          "planner_llm_config": null, // Optional override for agent LLM settings
           "summarizer_llm_config": null, // Optional override
           "writer_llm_config": null, // Optional override
-          "max_search_tasks": null, // Optional override
-          "llm_provider": null // Optional override ('google', 'openrouter', etc.)
+          "refiner_llm_config": null, // Optional override
+          // Other config overrides from DeepResearchConfig can go here
+          "max_search_tasks": null
         }
         ```
-    *   Receive JSON status updates:
+    *   Receive JSON status updates conforming to the structure in `websocket_guide.md`:
         ```json
         {
-          "step": "STEP_NAME", // e.g., "PLANNING", "SEARCHING", "PROCESSING", "WRITING", "REFINING", "COMPLETE", "ERROR"
-          "status": "STATUS", // e.g., "START", "IN_PROGRESS", "END", "SUCCESS", "ERROR", "WARNING"
+          "step": "STEP_NAME", // e.g., "PLANNING", "SEARCHING", "RANKING", "PROCESSING", "WRITING", "REFINING", "FINALIZING", "COMPLETE", "ERROR"
+          "status": "STATUS", // e.g., "START", "END", "IN_PROGRESS", "SUCCESS", "ERROR", "WARNING", "INFO"
           "message": "Human-readable status message",
-          "details": { ... } // Optional dictionary with extra context
+          "details": { ... } // Optional dictionary with context (structure varies)
         }
         ```
-    *   The final message will have `step: "COMPLETE"` (or `step: "ERROR"`) and include the full report and usage statistics in the `details` field upon success.
+    *   The final success message (`step: "COMPLETE", status: "END"`) includes final usage statistics in `details`. The actual report content is sent earlier in the `step: "FINALIZING", status: "END"` message's `details`.
 
-3.  **Deprecated Endpoint:**
-    *   The synchronous endpoint `/research` (POST) is deprecated and will return an error message directing you to use `/ws/research`.
+3.  **Other Endpoints:**
+    *   `/settings`: GET endpoint to view current application settings (excluding secrets).
+    *   `/tasks`: GET endpoint to list persisted tasks from Firestore.
+    *   `/tasks/{task_id}`: GET endpoint to retrieve details of a specific task.
+    *   `/tasks/stop/{task_id}`: POST endpoint to request cancellation of a running task.
 
-## 🤝 Contributing
+## 🤝 Contributing - Build Your Own Agents!
 
-Contributions are highly welcome! This project aims to be a robust, community-driven tool for deep research.
-
-**Areas for Contribution:**
-
-*   **Specialized Scrapers:** Adding more robust scrapers for specific high-value websites (e.g., ArXiv, PubMed, specific news sites, documentation portals) in the `app/services/scraping_utils/` directory is highly encouraged!
-*   **Agent Enhancements:** Improving planning logic, refinement strategies, or context management.
-*   **LLM Support:** Adding configurations or improving compatibility with more LLM providers via LiteLLM.
-*   **Error Handling:** Refining exception handling and reporting.
-*   **Testing:** Adding more comprehensive unit and integration tests.
-*   **Documentation:** Improving this README, adding architecture diagrams, or API documentation.
+**Contributions are highly encouraged!** This framework is designed to grow. Help us build a diverse ecosystem of powerful research agencies.
 
 **How to Contribute:**
+
+1.  **Add a New Agency:**
+    *   **Create Directory:** Make a new folder `app/agencies/your_agency_name/`.
+    *   **Define Components:** Inside, create `__init__.py`, `orchestrator.py`, `agents.py`, and `schemas.py`. Add `prompts.py` or `helpers.py` as needed.
+    *   **Implement Logic:**
+        *   Write your orchestration flow in `orchestrator.py`.
+        *   Define your agent logic in `agents.py`, leveraging LLMs and structured output via Pydantic schemas defined in `schemas.py`.
+        *   Reuse core services from `app/services/` (e.g., `SearchService`, `WebScraper`) by importing and calling them in your orchestrator or helpers.
+    *   **Define API Endpoint:** Add FastAPI routes (e.g., a WebSocket endpoint) for your new agency in `app/main.py` or by creating a dedicated router in your agency directory and including it in `app/main.py`.
+    *   **Add Configuration:** Update `app/core/config.py` if your agency requires specific settings.
+    *   **Document:** Add a README or update this one explaining your agency's purpose and workflow.
+2.  **Add a New Service:**
+    *   Create a new module or directory under `app/services/` (for general services) or potentially `app/agencies/services/` (if strongly tied to agent concepts like ranking).
+    *   Implement your service logic (e.g., connecting to a new search API, implementing a data analysis tool).
+    *   Ensure it's easily callable, ideally stateless, and potentially asynchronous.
+    *   Add necessary configuration to `app/core/config.py`.
+3.  **Enhance Existing Components:** Improve agents, services, error handling, add tests, or refine documentation.
+
+**General Contribution Steps:**
 
 1.  Fork the repository.
 2.  Create a new branch (`git checkout -b feature/your-feature-name`).
 3.  Make your changes.
-4.  Add tests for your changes.
+4.  Add tests for your changes (highly recommended!).
 5.  Ensure code passes linting and formatting checks (e.g., using Ruff/Black).
 6.  Commit your changes (`git commit -m 'Add some feature'`).
 7.  Push to the branch (`git push origin feature/your-feature-name`).
-8.  Open a Pull Request.
+8.  Open a Pull Request against the main repository.
 
-Please review the `CONTRIBUTING.md` (if available) for more detailed guidelines.
+**Other Areas for Contribution:**
+
+*   **LLM Support:** Improve compatibility or add configuration options for more LLM providers (especially those with strong structured output support).
+*   **Specialized Scrapers:** Add robust scrapers for specific sites or content types in `app/services/scraping_utils/`.
+*   **Error Handling & Resilience:** Refine exception handling, retries, and state management across the framework.
+*   **Testing:** Add more comprehensive unit, integration, and agent simulation tests.
+*   **Documentation:** Improve READMEs, code comments, architecture diagrams, or API documentation (`websocket_guide.md`, `firestore_schema.md`).
 
 ## 📜 Citation
 
@@ -238,10 +236,6 @@ This project builds upon concepts and architectures explored in academic researc
       url={https://arxiv.org/abs/2503.20201},
 }
 ```
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 📧 Contact
 

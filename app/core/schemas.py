@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Dict, Optional
+from collections import defaultdict
+from pydantic_ai.usage import Usage # Import the base Usage class
 
 
 class SearchTask(BaseModel):
@@ -34,3 +36,54 @@ class UsageStatistics(BaseModel):
     serper_queries_used: int = Field(..., description="Total number of calls made to the Serper Search API.")
     sources_processed_count: int = Field(..., description="Total number of unique source URLs fetched and processed.")
     refinement_iterations_run: int = Field(..., description="Number of refinement loops (search -> process -> refine) executed.") 
+
+# --- NEW RunUsage Class ---
+class RunUsage:
+    """Tracks detailed usage across an orchestration run."""
+    _agent_usage: Dict[str, Usage]
+    _serper_queries: int
+    _sources_processed: int
+    _refinement_iterations: int
+
+    def __init__(self):
+        self._agent_usage = defaultdict(Usage)
+        self._serper_queries = 0
+        self._sources_processed = 0
+        self._refinement_iterations = 0
+
+    def update_agent_usage(self, agent_name: str, usage_increment: Usage):
+        """Updates the usage count for a specific agent."""
+        self._agent_usage[agent_name] += usage_increment
+
+    def increment_serper_queries(self, count: int = 1):
+        """Increments the count of Serper API calls."""
+        self._serper_queries += count
+
+    def increment_sources_processed(self, count: int = 1):
+        """Increments the count of unique sources processed."""
+        self._sources_processed += count
+
+    def increment_refinement_iterations(self, count: int = 1):
+        """Increments the count of refinement iterations."""
+        self._refinement_iterations += count
+
+    def get_statistics(self) -> UsageStatistics:
+        """Converts tracked usage into the UsageStatistics schema."""
+        token_usage_map: Dict[str, TokenUsageCounter] = {}
+        for agent_name, agent_usage in self._agent_usage.items():
+            token_usage_map[agent_name] = TokenUsageCounter(
+                prompt_tokens=agent_usage.request_tokens or 0,
+                completion_tokens=agent_usage.response_tokens or 0,
+                total_tokens=agent_usage.total_tokens or 0,
+            )
+
+        # TODO: Implement cost estimation if needed
+        estimated_cost_map = None # Placeholder
+
+        return UsageStatistics(
+            token_usage=token_usage_map if token_usage_map else None,
+            estimated_cost=estimated_cost_map,
+            serper_queries_used=self._serper_queries,
+            sources_processed_count=self._sources_processed,
+            refinement_iterations_run=self._refinement_iterations,
+        ) 

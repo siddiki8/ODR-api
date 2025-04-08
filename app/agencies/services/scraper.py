@@ -188,6 +188,12 @@ class WebScraper:
             content = await handle_local_pdf_file(temp_pdf_path, max_size_bytes=None) # Already checked size
             return content
         except httpx.HTTPStatusError as e:
+            # Log 403 Forbidden specifically as a warning, other HTTP errors as errors
+            if e.response.status_code == 403:
+                logger.warning(f"Access Forbidden (403) fetching direct PDF URL {url}. Might require authentication or have access restrictions.")
+            else:
+                logger.error(f"HTTP Error {e.response.status_code} fetching direct PDF URL {url}")
+            # Still raise ScrapingError as the fetch failed
             raise ScrapingError(f"HTTP Error {e.response.status_code} fetching direct PDF URL {url}") from e
         except httpx.RequestError as e:
             raise ScrapingError(f"Network Error fetching direct PDF URL {url}: {e}") from e

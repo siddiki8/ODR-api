@@ -2,9 +2,12 @@ import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 import os
+import json
+import re
 
 # Pydantic AI imports
 from pydantic_ai.usage import Usage
+from pydantic import ValidationError
 
 # Import agency components
 from . import agents
@@ -50,7 +53,25 @@ async def run_deep_research_orchestration(
             agents._PLANNER_USER_MESSAGE_TEMPLATE.format(user_query=user_query),
             usage=usage_tracker
         )
+        
+        # Revert: Expect PlannerOutput directly now that result_type is set
         planner_output: schemas.PlannerOutput = planner_result.data
+
+        # Type check for safety (optional, but good practice)
+        if not isinstance(planner_output, schemas.PlannerOutput):
+             logger.error(f"Planner agent returned unexpected type: {type(planner_output)}")
+             logger.error(f"Raw data: {planner_result.data}")
+             # Log the model name used for the planner agent if available
+             try:
+                 model_name = agents_collection.planner.model.model if hasattr(agents_collection.planner.model, 'model') else 'N/A'
+                 logger.error(f"Model used: {model_name}")
+             except Exception: # Catch potential issues accessing model info
+                 logger.error("Could not retrieve model name.")
+             raise TypeError(
+                 f"Planner agent was expected to return schemas.PlannerOutput, "
+                 f"but returned {type(planner_output)}. Check model compatibility and prompt compliance."
+             )
+
         search_tasks: List[SearchTask] = planner_output.search_tasks
         writing_plan: schemas.WritingPlan = planner_output.writing_plan
         logger.info(f"Planner generated {len(search_tasks)} search tasks and a writing plan.")
@@ -204,33 +225,60 @@ async def run_deep_research_orchestration(
 
     if documents_for_chunking:
         try:
-            all_chunk_dicts = await chunk_content_helper(
+            # Chunk content and group by source URL
+            grouped_chunk_dicts: Dict[str, List[Dict[str, Any]]] = await chunk_content_helper(
                 documents_to_chunk=documents_for_chunking,
                 chunk_settings=config.default_chunk_settings.model_dump(),
-                max_chunks=config.max_total_chunks,
+                max_chunks=config.max_total_chunks, # Overall max chunks still applies
                 logger=logger
             )
 
-            reranked_chunk_dicts = []
-            if all_chunk_dicts:
-                api_key = config.together_api_key.get_secret_value()
-                model = config.reranker_model
-                reranked_chunk_dicts = await rerank_chunks_helper(
-                    query=user_query,
-                    chunk_dicts=all_chunk_dicts,
-                    model=model,
-                    api_key=api_key,
-                    threshold=config.rerank_relevance_threshold,
-                    logger=logger
-                )
-            
-            if reranked_chunk_dicts:
-                 logger.info(f"Adding {len(reranked_chunk_dicts)} relevant chunks from secondary sources.")
-                 for chunk_dict in reranked_chunk_dicts:
+            # Iterate through each source and rerank its chunks
+            relevant_chunks_from_all_sources: List[Dict[str, Any]] = []
+            api_key = config.together_api_key.get_secret_value()
+            model = config.reranker_model
+            rerank_threshold = config.chunk_rerank_relevance_threshold
+            # Define how many top chunks to keep per source after reranking
+            # top_n_chunks_per_source = config.top_n_chunks_per_source # No longer needed as we keep all above threshold
+
+            for source_url, source_chunks in grouped_chunk_dicts.items():
+                 if not source_chunks:
+                      continue # Skip if no chunks for this source
+
+                 logger.info(f"Reranking {len(source_chunks)} chunks for source: {source_url}")
+                 try:
+                    reranked_source_chunks = await rerank_chunks_helper(
+                        query=user_query, # Rerank based on the main query
+                        chunk_dicts=source_chunks,
+                        model=model,
+                        api_key=api_key,
+                        threshold=rerank_threshold, # Use the chunk-specific threshold
+                        logger=logger
+                    )
+
+                    # Previously selected top N, now keep all chunks meeting the threshold
+                    if reranked_source_chunks:
+                        # top_chunks_for_this_source = reranked_source_chunks[:top_n_chunks_per_source] # REMOVED SLICING
+                        relevant_chunks_from_all_sources.extend(reranked_source_chunks) # Add all returned chunks
+                        logger.info(f"Selected {len(reranked_source_chunks)} chunks for source {source_url} meeting threshold {config.chunk_rerank_relevance_threshold}.")
+                        # logger.info(f"Selected top {len(top_chunks_for_this_source)} chunks (max {top_n_chunks_per_source}) for source {source_url} after reranking.") # Old log message
+                    else:
+                         logger.info(f"No chunks from source {source_url} met the rerank threshold ({config.chunk_rerank_relevance_threshold}).")
+                 except Exception as rerank_err:
+                      logger.error(f"Error reranking chunks for source {source_url}: {rerank_err}", exc_info=False)
+                      # Continue to the next source
+
+            # Now process the combined list of top relevant chunks from all sources
+            if relevant_chunks_from_all_sources:
+                 logger.info(f"Adding {len(relevant_chunks_from_all_sources)} total relevant chunks from {len(grouped_chunk_dicts)} secondary sources.")
+                 # Optional: Sort the final combined list by score if desired
+                 relevant_chunks_from_all_sources.sort(key=lambda x: x.get('score', 0.0), reverse=True)
+
+                 for chunk_dict in relevant_chunks_from_all_sources:
                      link = chunk_dict.get('metadata', {}).get('link')
                      title = chunk_dict.get('metadata', {}).get('title')
                      content = chunk_dict.get('content')
-                     score = chunk_dict.get('score') 
+                     score = chunk_dict.get('score')
 
                      if link and title and content:
                              rank = len(all_source_materials) + 1
@@ -244,7 +292,7 @@ async def run_deep_research_orchestration(
                                  processed_links.add(link_str_chunk)
                              logger.debug(f"Added relevant chunk for {link_str_chunk} (Score: {score:.4f if score else 'N/A'}) with rank {rank}")
                      else:
-                         logger.warning(f"Skipping selected chunk due to missing link/title/content")
+                         logger.warning(f"Skipping selected chunk due to missing link/title/content. Metadata: {chunk_dict.get('metadata')}")
         except Exception as e:
             logger.error(f"Error during chunking/reranking of secondary sources: {e}", exc_info=True)
 
@@ -378,7 +426,7 @@ async def run_deep_research_orchestration(
                            query=user_query,
                            chunk_dicts=refinement_chunk_dicts,
                            model=model, api_key=api_key,
-                           threshold=config.rerank_relevance_threshold,
+                           threshold=config.chunk_rerank_relevance_threshold, # Use the chunk-specific threshold
                            logger=logger
                       )
                  

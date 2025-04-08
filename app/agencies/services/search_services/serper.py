@@ -9,7 +9,7 @@ from app.core.schemas import SearchTask
 from app.core.exceptions import ConfigurationError, SearchAPIError
 
 # Import the shared config class
-from ..search import SerperConfig
+from app.core.config import SerperConfig
 
 logger = logging.getLogger(__name__)
 

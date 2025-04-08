@@ -21,10 +21,10 @@ try:
     from pydantic import ValidationError
 except ImportError as e:
     logger.error(f"Import Error: {e}. Make sure you are running this script from the project root "
-                 f"and the necessary packages are installed and accessible.")
+                 f"and the necessary packages are installed and accessible.", exc_info=True)
     exit(1)
 except Exception as e:
-    logger.error(f"An unexpected error occurred during imports: {e}")
+    logger.error(f"An unexpected error occurred during imports: {e}", exc_info=True)
     exit(1)
 
 
@@ -52,7 +52,7 @@ async def main():
                      "OPENROUTER_API_KEY, SERPER_API_KEY) are set correctly in your environment or .env file.")
         return
     except ValueError as e: # Catch custom validator errors (like missing API key)
-         logger.error(f"Configuration Error: {e}")
+         logger.error(f"Configuration Error: {e}", exc_info=True)
          return
     except Exception as e:
         logger.error(f"An unexpected error occurred during configuration loading: {e}", exc_info=True)
@@ -62,10 +62,11 @@ async def main():
     try:
         logger.info("Initializing agency agents...")
         # Ensure OPENROUTER_API_KEY is set in the environment
-        agency_agents = get_agency_agents()
+        # Pass the loaded config to the initialization function
+        agency_agents = get_agency_agents(config=deep_research_config)
         logger.info("Agency agents initialized.")
     except ValueError as e: # Catch potential key errors during agent init
-        logger.error(f"Agent Initialization Error: {e}")
+        logger.error(f"Agent Initialization Error: {e}", exc_info=True)
         logger.error("Please ensure OPENROUTER_API_KEY is set.")
         return
     except Exception as e:

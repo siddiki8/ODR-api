@@ -3,7 +3,7 @@ from typing import List, Optional, Dict, Any, Union
 from pydantic import HttpUrl
 
 # --- Internal Imports ---
-from ..core.exceptions import ScrapingError, ConfigurationError, SearchAPIError, RankingAPIError, ChunkingError
+from app.core.exceptions import ScrapingError, ConfigurationError, SearchAPIError, RankingAPIError, ChunkingError
 from ..services.scraper import WebScraper, ExtractionResult
 from ..services.search import SearchResult, SearchTask
 from ..services.ranking import rerank_with_together_api, RankedItem
@@ -18,26 +18,28 @@ from app.core.config import AppSettings
 
 # --- Helper Functions --- #
 async def chunk_content_helper(
-    documents_to_chunk: List[Dict[str, Any]], # Expects list of {'content': str, 'metadata': {...}}
+    documents_to_chunk: List[Dict[str, Any]], # Expects list of {'content': str, 'metadata': {'link': str, ...}}
     chunk_settings: Dict[str, int], # e.g., {'chunk_size': ..., 'chunk_overlap': ..., 'min_chunk_size': ...}
     max_chunks: Optional[int],
     logger: logging.Logger
-) -> List[Dict[str, Any]]:
+) -> Dict[str, List[Dict[str, Any]]]: # Return Dict[url_str, List[chunk_dict]]
     """Chunks content from multiple documents using the chunking service.
+       Groups the resulting chunks by their original source URL.
 
     Args:
-        documents_to_chunk: List of dictionaries, each with 'content' and 'metadata'.
+        documents_to_chunk: List of dictionaries, each with 'content' and 'metadata' (must include 'link').
         chunk_settings: Dictionary with chunking parameters.
         max_chunks: Optional overall limit on the number of chunks generated.
         logger: Logger instance.
 
     Returns:
-        A list of chunk dictionaries, ready for reranking or context assembly.
-        Returns empty list on failure.
+        A dictionary where keys are source URLs (str) and values are lists of
+        chunk dictionaries associated with that URL.
+        Returns empty dict on failure or if no chunks are generated.
     """
     if not documents_to_chunk:
         logger.info("No documents provided to chunk_content_helper.")
-        return []
+        return {}
 
     # Ensure required keys are present in chunk_settings with defaults if necessary
     chunk_size = chunk_settings.get('chunk_size', 2048)
@@ -54,14 +56,33 @@ async def chunk_content_helper(
             min_chunk_size=min_chunk_size,
             max_chunks=max_chunks
         )
-        logger.info(f"Chunking service generated {len(all_chunked_dicts)} total chunk dictionaries.")
-        return all_chunked_dicts
+        logger.info(f"Chunking service generated {len(all_chunked_dicts)} total chunk dictionaries before grouping.")
+
+        # Group chunks by source URL
+        grouped_chunks: Dict[str, List[Dict[str, Any]]] = {}
+        skipped_count = 0
+        for chunk in all_chunked_dicts:
+            source_link = chunk.get('metadata', {}).get('link')
+            if source_link:
+                url_str = str(source_link) # Ensure it's a string key
+                if url_str not in grouped_chunks:
+                    grouped_chunks[url_str] = []
+                grouped_chunks[url_str].append(chunk)
+            else:
+                skipped_count += 1
+                logger.warning(f"Chunk missing source link in metadata, skipping: {chunk.get('content', '')[:50]}...")
+
+        if skipped_count > 0:
+             logger.warning(f"Skipped {skipped_count} chunks due to missing source link metadata.")
+
+        logger.info(f"Grouped chunks by source URL. Result has {len(grouped_chunks)} sources.")
+        return grouped_chunks
     except ChunkingError as e:
         logger.error(f"Chunking service failed: {e}", exc_info=False)
-        return []
+        return {}
     except Exception as e:
         logger.error(f"Unexpected error during chunking helper execution: {e}", exc_info=True)
-        return []
+        return {}
 
 
 # --- Search Helper --- #

@@ -1,12 +1,14 @@
 import logging
 import os
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from pydantic_ai import Agent, RunContext, ModelRetry
-from pydantic_ai.models import OpenRouter
+from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.openai import OpenAIProvider
 from typing import Dict, TYPE_CHECKING, Any
 import re
 
 from . import schemas
+from .config import DeepResearchConfig
 
 # Add type checking import for SourceSummary
 if TYPE_CHECKING:
@@ -316,83 +318,86 @@ if not OPENROUTER_API_KEY:
     logger.warning("OPENROUTER_API_KEY environment variable not set. Agent initialization might fail.")
     # You might want to raise an error here depending on application requirements
 
-PLANNER_MODEL_ID = "anthropic/claude-3.5-sonnet"
-SUMMARIZER_MODEL_ID = "anthropic/claude-3-haiku"
-WRITER_MODEL_ID = "anthropic/claude-3.5-sonnet"
-REFINER_MODEL_ID = "anthropic/claude-3-haiku"
-
-def create_openrouter_model(model_id: str) -> OpenRouter:
-    """Helper function to create an OpenRouter model instance."""
-    return OpenRouter(api_key=OPENROUTER_API_KEY, model=model_id)
+def create_llm_model(model_id: str) -> OpenAIModel:
+    """Helper function to create an OpenAI-compatible model instance for OpenRouter."""
+    if not OPENROUTER_API_KEY:
+        # Raise error earlier if key is missing, as provider needs it.
+        raise ValueError("OPENROUTER_API_KEY environment variable not set.")
+    
+    provider = OpenAIProvider(
+        api_key=OPENROUTER_API_KEY,
+        base_url="https://openrouter.ai/api/v1"
+    )
+    # Model ID format might need adjustment depending on OpenRouter/Provider expectations
+    # Using the provided model_id directly as it seems like the intended format.
+    # Pass model_id as the first positional argument
+    return OpenAIModel(model_id, provider=provider)
 
 # --- Agent Definitions --- 
 
-def create_planner_agent() -> Agent:
-    """Creates the Planner Agent instance using OpenRouter."""
-    planner_model = create_openrouter_model(PLANNER_MODEL_ID)
-    logger.debug(f"Creating Planner Agent with model: {planner_model.model}")
+def create_planner_agent(config: DeepResearchConfig) -> Agent:
+    """Creates the Planner Agent instance."""
+    model_id = config.planner_model_id # Get model_id from config
+    logger.debug(f"Creating Planner Agent with model: {model_id}") # Log the id directly
+    planner_model = create_llm_model(model_id)
     return Agent[
         schemas.PlannerOutput
     ](
         model=planner_model,
-        system_prompt=_PLANNER_SYSTEM_PROMPT, # Use local prompt string
+        system_prompt=_PLANNER_SYSTEM_PROMPT,
+        result_type=schemas.PlannerOutput
     )
 
-def create_summarizer_agent() -> Agent:
-    """Creates the Summarizer Agent instance using OpenRouter."""
-    summarizer_model = create_openrouter_model(SUMMARIZER_MODEL_ID)
-    logger.debug(f"Creating Summarizer Agent with model: {summarizer_model.model}")
+def create_summarizer_agent(config: DeepResearchConfig) -> Agent:
+    """Creates the Summarizer Agent instance."""
+    model_id = config.summarizer_model_id # Get model_id from config
+    logger.debug(f"Creating Summarizer Agent with model: {model_id}") # Log the id directly
+    summarizer_model = create_llm_model(model_id)
     return Agent[str](
         model=summarizer_model,
-        system_prompt=_SUMMARIZER_SYSTEM_PROMPT, # Use local prompt string
+        system_prompt=_SUMMARIZER_SYSTEM_PROMPT,
+        result_type=str
     )
 
-def create_writer_agent() -> Agent:
-    """Creates the Writer Agent instance using OpenRouter."""
-    writer_model = create_openrouter_model(WRITER_MODEL_ID)
-    logger.debug(f"Creating Writer Agent with model: {writer_model.model}")
+def create_writer_agent(config: DeepResearchConfig) -> Agent:
+    """Creates the Writer Agent instance."""
+    model_id = config.writer_model_id # Get model_id from config
+    logger.debug(f"Creating Writer Agent with model: {model_id}") # Log the id directly
+    writer_model = create_llm_model(model_id)
     return Agent[schemas.WriterOutput](
         model=writer_model,
-        system_prompt=_WRITER_SYSTEM_PROMPT_BASE, # Use local prompt string
-        deps_type=None # Added for RunContext compatibility
+        system_prompt=_WRITER_SYSTEM_PROMPT_BASE,
+        deps_type=None,
+        result_type=schemas.WriterOutput
     )
 
-def create_refiner_agent() -> Agent:
+def create_refiner_agent(config: DeepResearchConfig) -> Agent:
     """
-    Creates the Refiner Agent instance using OpenRouter.
+    Creates the Refiner Agent instance.
     Handles revisions and refinement. Signals need for external actions via JSON structure.
     """
-    refiner_model = create_openrouter_model(REFINER_MODEL_ID)
-    logger.debug(f"Creating Refiner Agent with model: {refiner_model.model}")
+    model_id = config.refiner_model_id # Get model_id from config
+    logger.debug(f"Creating Refiner Agent with model: {model_id}") # Log the id directly
+    refiner_model = create_llm_model(model_id)
     return Agent[schemas.WriterOutput](
         model=refiner_model,
-        system_prompt=_REFINEMENT_SYSTEM_PROMPT, # Use local prompt string
-        deps_type=None # Added for RunContext compatibility
+        system_prompt=_REFINEMENT_SYSTEM_PROMPT,
+        deps_type=None,
+        result_type=schemas.WriterOutput
     )
 
 # Structure to hold all agents for the agency
 class AgencyAgents(BaseModel):
-    planner: Agent
-    summarizer: Agent
-    writer: Agent
-    refiner: Agent
+    planner: Any
+    summarizer: Any
+    writer: Any
+    refiner: Any
 
-    class Config:
-        arbitrary_types_allowed = True
-
-# --- Result Validator Definition ---
-async def validate_citations_present(ctx: RunContext[None], result: schemas.WriterOutput) -> schemas.WriterOutput:
-    """Validates that the report content includes [[CITATION:rank]] markers."""
-    # Pattern looks for [[CITATION: followed by digits, possibly commas, then ]]
-    citation_pattern = r"\[[CITATION:\d+,?\]\]" 
-    if not result.report_content or not re.search(citation_pattern, result.report_content):
-        logger.warning(f"Validation failed for agent {ctx.agent_name}: Report missing citation markers. Requesting retry {ctx.retry + 1}.")
-        raise ModelRetry("The generated report is missing mandatory citation markers like [[CITATION:1]] or [[CITATION:1,2]]. Please revise the report to include citations for specific facts, findings, and claims derived from the source materials provided.")
-    logger.debug(f"Validation passed for agent {ctx.agent_name}: Citations found.")
-    return result
+    # Re-added model_config to allow arbitrary Agent types
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 # --- Agent Initialization Function ---
-def get_agency_agents() -> AgencyAgents:
+def get_agency_agents(config: DeepResearchConfig) -> AgencyAgents:
     """
     Initializes and returns all PydanticAI Agent instances for the agency,
     including applying result validators.
@@ -400,16 +405,25 @@ def get_agency_agents() -> AgencyAgents:
     Returns:
         An AgencyAgents object containing the initialized PydanticAI agents.
     """
-    planner = create_planner_agent()
-    summarizer = create_summarizer_agent()
-    writer = create_writer_agent()
-    refiner = create_refiner_agent()
+    planner = create_planner_agent(config=config)
+    summarizer = create_summarizer_agent(config=config)
+    writer = create_writer_agent(config=config)
+    refiner = create_refiner_agent(config=config)
 
-    # Apply the result validator to writer and refiner
-    # Note: The decorator syntax doesn't work directly here as we apply it after instantiation
-    writer.add_result_validator(validate_citations_present)
-    refiner.add_result_validator(validate_citations_present)
-    logger.info("Added citation validator to Writer and Refiner agents.")
+    # --- Apply Result Validator using Decorator Syntax ---
+    # Define the validator function here after agents are created
+    @writer.result_validator
+    @refiner.result_validator
+    async def validate_citations_present(ctx: RunContext[None], result: schemas.WriterOutput) -> schemas.WriterOutput:
+        """Validates that the report content includes [[CITATION:rank]] markers."""
+        citation_pattern = r"\[\[CITATION:\d+(,\d+)*\]\]"
+        if not result.report_content or not re.search(citation_pattern, result.report_content):
+            logger.warning(f"Validation failed: Report missing citation markers. Requesting retry {ctx.retry + 1}.")
+            raise ModelRetry("The generated report is missing mandatory citation markers like [[CITATION:1]] or [[CITATION:1,2]]. Please revise the report to include citations for specific facts, findings, and claims derived from the source materials provided.")
+        logger.debug(f"Validation passed: Citations found.")
+        return result
+
+    logger.info("Added citation validator to Writer and Refiner agents via decorator.")
 
     logger.info("Initialized Agency Agents (Planner, Summarizer, Writer, Refiner) using OpenRouter.")
 

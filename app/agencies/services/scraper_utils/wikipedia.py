@@ -3,7 +3,7 @@ import wikipediaapi
 from urllib.parse import urlparse
 
 # Import ScrapingError relative to the app root
-from ...core.exceptions import ScrapingError
+from app.core.exceptions import ScrapingError
 
 logger = logging.getLogger(__name__)
 

@@ -6,12 +6,14 @@ from typing import List, Dict, Any, Optional
 import logging
 
 # Pydantic imports for schemas
+import pydantic
 from pydantic import BaseModel, Field, HttpUrl, ConfigDict, SecretStr
 
 # Import custom exceptions from the core module
-from ..core.exceptions import ConfigurationError, SearchAPIError, ValidationError
+from app.core.exceptions import ConfigurationError, SearchAPIError, ValidationError
 # Import SearchTask schema for type hinting
-from ..core.schemas import SearchTask
+from app.core.schemas import SearchTask
+from app.core.config import SerperConfig # Import from core.config
 
 # --- Search Schema Definitions ---
 
@@ -19,47 +21,20 @@ class SearchResult(BaseModel):
     """
     Represents a single processed search result item from an external API like Serper.
     Provides a structured way to access common fields.
+    Adapts to different search types (web, scholar, news) by making specific fields optional.
     """
-    model_config = ConfigDict(extra='ignore')
+    model_config = ConfigDict(extra='ignore', populate_by_name=True)
     title: str = Field(..., description="The title of the search result.")
-    link: HttpUrl = Field(..., description="The URL of the search result.")
+    link: HttpUrl = Field(..., description="The primary URL of the search result.")
     snippet: Optional[str] = Field(None, description="A brief snippet or description from the search result.")
-    position: Optional[int] = Field(None, description="The rank/position of the result.")
-    # raw: Dict[str, Any] # Optionally store the original dictionary
+    position: Optional[int] = Field(None, description="The rank/position of the result (mainly for web search).")
 
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'SearchResult':
-        """
-        Factory method to create a SearchResult instance from a raw dictionary
-        (e.g., an item from Serper API 'organic' results).
-
-        Performs basic validation and type conversion.
-
-        Args:
-            data: The dictionary representing a single search result.
-
-        Returns:
-            A SearchResult instance.
-
-        Raises:
-            ValidationError: If essential fields like 'link' are missing or invalid.
-        """
-        try:
-            return cls(
-                title=data.get('title', 'Untitled'),
-                link=data['link'], # Let Pydantic validate/raise
-                snippet=data.get('snippet', ''),
-                position=data.get('position', -1),
-                # raw=data # Uncomment if raw data is needed
-            )
-        except KeyError as e:
-             # Specifically catch if 'link' is missing
-             raise ValidationError(f"Missing required field 'link' in search result data: {data}") from e
-        except Exception as e:
-             # Catch other potential Pydantic validation errors or unexpected issues
-             logger.warning(f"Error creating SearchResult from dict: {e}. Data: {data}")
-             # Re-raise as validation error or a custom error if preferred
-             raise ValidationError(f"Error validating search result data: {e}") from e
+    # Fields potentially available in scholar/news results
+    publicationInfo: Optional[str] = Field(None, description="Publication information (e.g., authors, journal, year).")
+    year: Optional[int] = Field(None, description="Publication year.")
+    citedBy: Optional[int] = Field(None, description="Number of citations.")
+    pdfUrl: Optional[HttpUrl] = Field(None, description="Direct link to a PDF version, if available.")
+    resourceId: Optional[str] = Field(None, alias='id', description="Unique identifier for the result item (e.g., Google Scholar ID).")
 
 class SearchResultList(BaseModel):
     """Represents a list of search results for a given query."""
@@ -73,43 +48,11 @@ from .search_services.serper import search_serper_batch_service
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class SerperConfig:
-    """Configuration settings for the Serper Search API client."""
-    api_key: str
-    base_url: str = "https://google.serper.dev" # Base URL for the Serper API
-    default_location: str = 'us' # Default geographical location for searches
-    timeout: int = 15 # Default timeout in seconds for API requests
-
-    @classmethod
-    def from_env(cls) -> 'SerperConfig':
-        """
-        Creates a SerperConfig instance by loading settings from environment variables.
-        
-        Reads:
-            SERPER_API_KEY (required)
-            SERPER_BASE_URL (optional, default: https://google.serper.dev)
-            SERPER_TIMEOUT (optional, default: 15)
-            
-        Raises:
-            ConfigurationError: If SERPER_API_KEY is not set.
-        """
-        api_key = os.getenv("SERPER_API_KEY")
-        if not api_key:
-            raise ConfigurationError("SERPER_API_KEY environment variable not set")
-        
-        base_url = os.getenv("SERPER_BASE_URL", "https://google.serper.dev")
-        
-        timeout_str = os.getenv("SERPER_TIMEOUT", "15")
-        try:
-            timeout = int(timeout_str)
-            if timeout <= 0:
-                raise ValueError("Timeout must be positive")
-        except ValueError:
-            logger.warning(f"Invalid SERPER_TIMEOUT value '{timeout_str}'. Using default 15.")
-            timeout = 15
-
-        return cls(api_key=api_key, base_url=base_url, timeout=timeout)
+# --- Removed SerperConfig Definition --- 
+# @dataclass
+# class SerperConfig:
+#     ...
+# --- End Removed SerperConfig Definition --- 
 
 async def execute_batch_serper_search(
     search_tasks: List[SearchTask], # Expecting validated SearchTask objects
@@ -181,17 +124,17 @@ async def execute_batch_serper_search(
                       logger.warning(f"Skipping non-dictionary item in results for query '{query_key}': {item_dict}")
                       continue
                  try:
-                     # Use the classmethod to parse and validate
-                     parsed_item = SearchResult.from_dict(item_dict)
+                     # Rely directly on Pydantic model initialization for parsing and validation
+                     parsed_item = SearchResult(**item_dict)
                      parsed_results_map[query_key].append(parsed_item)
                      parsed_count += 1
-                 except ValidationError as e:
+                 except pydantic.ValidationError as e: # Catch validation errors
                      # Log validation errors but don't stop processing other items
                      logger.warning(f"Validation error parsing search result item for query '{query_key}': {e}. Skipping item: {item_dict}")
                  except Exception as e:
-                      # Catch unexpected errors during from_dict
-                      logger.error(f"Unexpected error parsing search result item for query '{query_key}': {e}. Item: {item_dict}", exc_info=False)
-                      
+                      # Catch other unexpected errors during instantiation
+                      logger.error(f"Unexpected error creating SearchResult for query '{query_key}': {e}. Item: {item_dict}", exc_info=False)
+
              logger.debug(f"Parsed {parsed_count} valid result items for query: '{query_key}'.")
 
         logger.info(f"Finished parsing batch search results. Returning map with {len(parsed_results_map)} queries.")

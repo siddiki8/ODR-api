@@ -219,7 +219,7 @@ async def _test_async():
             log.info("  No results above threshold.")
         for result in reranked:
             # Use logger for output
-            log.info(f"  Index: {result['index']}, Score: {result['score']:.4f} - Document: {test_docs[result['index']]}")
+            log.info(f"  Index: a {result['index']}, Score: {result['score']:.4f} - Document: {test_docs[result['index']]}")
 
     except (ConfigurationError, RankingAPIError, ValueError) as e:
         log.error(f"Test failed: {type(e).__name__}: {e}")

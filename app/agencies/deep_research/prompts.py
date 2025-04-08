@@ -180,7 +180,7 @@ DATA PRESENTATION:
 INFORMATION GAPS:
 - Acknowledge when critical information called for in the writing plan is not found in any source
 - Do not substitute missing information with general knowledge or assumptions
-- Use the `<search_request query="...">` tag ONLY for significant gaps preventing substantial completion of a section
+- If *absolutely critical* information is missing that prevents substantial completion of a required section according to the plan, you may request specific searches.
 
 Follow the provided writing plan precisely, including the overall goal, tone, section structure, and specific guidance for each section. Ensure balanced coverage of all aspects of the query.
 
@@ -196,7 +196,20 @@ Follow the provided writing plan precisely, including the overall goal, tone, se
 
 Maintain a logical flow with clear transitions between sections. Organize complex information into digestible components while preserving important technical details. **Use Markdown formatting (like tables, code blocks, lists, bolding) to enhance clarity and structure.** Ensure the report directly addresses all aspects of the original user query.
 
-**IMPORTANT: Generate ONLY the report content. Start the report with a clear title formatted as a Markdown H1 (`# Title`), reflecting the 'overall_goal' from the writing plan. Immediately follow the title with the first section or introduction as specified in the plan. Do NOT include any conversational text, preamble, or self-description before the report title.**
+**IMPORTANT: Output ONLY a single JSON object adhering to the following schema. Do not include any conversational text, preamble, or self-description before or after the JSON object.**
+
+```json
+{{
+  "report_content": "# Report Title\n\n## Section 1 Title\n\nReport content in Markdown format... with [[CITATION:rank]] markers as specified...",
+  "requested_searches": [
+    {{
+      "query": "Specific search query needed to fill a critical information gap.",
+      "reasoning": "Brief explanation why this search is essential to fulfill the writing plan."
+    }}
+    // ... include only if critical information is missing
+  ] | null // Set to null or omit if no searches are needed
+}}
+```
 """
 
 # For Initial Draft Generation
@@ -283,7 +296,6 @@ def format_summaries_for_prompt(source_materials: list[Dict[str, Any]]) -> str:
             formatted_output.append(f"  Content: {content}") # Fallback
 
     return "\n".join(formatted_output) # Use single newline for tighter packing in prompt
-
 def get_writer_initial_prompt(user_query: str, writing_plan: dict, source_materials: list[dict[str, Any]]) -> list[dict[str, str]]:
     """
     Generates the message list for the Writer LLM (initial draft).
@@ -312,7 +324,9 @@ def get_writer_initial_prompt(user_query: str, writing_plan: dict, source_materi
     ]
 
 # For Refinement/Revision
-_WRITER_USER_MESSAGE_TEMPLATE_REFINEMENT = \
+_REFINEMENT_SYSTEM_PROMPT = _WRITER_SYSTEM_PROMPT_BASE # Use the same base prompt
+
+_REFINEMENT_USER_MESSAGE_TEMPLATE = \
 """
 Original User Query: {user_query}
 
@@ -330,10 +344,6 @@ Previously Generated Draft:
 Each item below is presented with its unique citation number, e.g., [rank].
 {formatted_new_summaries}
 
-All Available Source Materials (Initial + Previous Refinements):
-Each item below is presented with its unique citation number, e.g., [rank].
-{formatted_all_summaries}
-
 ---
 
 Please revise the previous draft to incorporate critical information from the new source materials about '{refinement_topic}'. 
@@ -347,9 +357,11 @@ When integrating this information:
 
 Integrate the new information smoothly into the existing structure defined by the writing plan while preserving the scholarly tone and comprehensive nature of the analysis. Prioritize factual accuracy and balanced treatment of all perspectives represented in the sources.
 
-If necessary, you may use the `<search_request query="...">` tag again if *absolutely critical* information for the plan is still missing, but avoid it if possible.
+If necessary, you may request *additional* searches using the `requested_searches` field in the JSON output if, even with the new information, *absolutely critical* data for fulfilling the plan is still missing. Avoid requesting searches if possible.
 
-Revised Report Draft:
+**Remember to output ONLY the JSON object containing the revised report and any essential search requests.**
+
+Revised Report JSON:
 """
 
 def get_writer_refinement_prompt(
@@ -358,7 +370,8 @@ def get_writer_refinement_prompt(
     previous_draft: str,
     refinement_topic: str,
     new_summaries: list[dict[str, str]],
-    all_summaries: list[dict[str, str]] # Includes initial + all refinement summaries so far
+    # REMOVED: all_summaries argument
+    # all_summaries: list[dict[str, str]] 
 ) -> list[dict[str, str]]:
     """
     Generates the message list for the Writer LLM (refinement/revision).
@@ -369,7 +382,8 @@ def get_writer_refinement_prompt(
         previous_draft: The previous report draft generated by the writer.
         refinement_topic: The specific topic requested via the <search_request> tag.
         new_summaries: List of summaries gathered specifically for this refinement topic.
-        all_summaries: List of all summaries gathered so far (initial + all refinements).
+        # REMOVED: all_summaries argument
+        # all_summaries: list[dict[str, str]] 
 
     Returns:
         A list of messages suitable for litellm.completion.
@@ -379,20 +393,20 @@ def get_writer_refinement_prompt(
     # We just need to format the 'new_summaries' list separately for its dedicated section in the prompt.
     # `format_summaries_for_prompt` handles displaying rank for each item.
     formatted_new_summaries_str = format_summaries_for_prompt(new_summaries)
-    formatted_all_summaries_str = format_summaries_for_prompt(all_summaries) # All summaries use standard formatting
+    # REMOVED: formatted_all_summaries_str = format_summaries_for_prompt(all_summaries)
     writing_plan_str = json.dumps(writing_plan, indent=2)
     
     return [
-        {"role": "system", "content": _WRITER_SYSTEM_PROMPT_BASE},
+        {"role": "system", "content": _REFINEMENT_SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": _WRITER_USER_MESSAGE_TEMPLATE_REFINEMENT.format(
+            "content": _REFINEMENT_USER_MESSAGE_TEMPLATE.format(
                 user_query=user_query,
                 writing_plan_json=writing_plan_str,
                 previous_draft=previous_draft,
                 refinement_topic=refinement_topic,
                 formatted_new_summaries=formatted_new_summaries_str,
-                formatted_all_summaries=formatted_all_summaries_str
+                # REMOVED: formatted_all_summaries=formatted_all_summaries_str
             )
         }
     ] 

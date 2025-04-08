@@ -14,8 +14,11 @@ from typing import List, Dict, Any, Optional
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 from langchain_core.documents import Document # Import Document type
 
-# Import custom exceptions
-from ..core.exceptions import ChunkingError
+# Pydantic imports for Chunk schema
+from pydantic import BaseModel, Field, HttpUrl, ConfigDict
+
+# Import custom exceptions using absolute path
+from app.core.exceptions import ChunkingError
 
 logger = logging.getLogger(__name__)
 
@@ -208,3 +211,14 @@ def chunk_and_label(
     return all_chunked_dicts
 
 # --- Removed Old Chunker Class --- 
+
+# --- Schemas ---
+
+class Chunk(BaseModel):
+    """Represents a single chunk of relevant text extracted from a source document."""
+    model_config = ConfigDict(extra='ignore')
+    content: str = Field(..., description="The text content of the chunk.", min_length=1)
+    link: HttpUrl = Field(..., description="The URL of the original source document.")
+    title: str = Field(..., description="The title of the original source document.")
+    relevance_score: Optional[float] = Field(None, description="Score assigned by the reranker indicating relevance to the query.")
+    rank: Optional[int] = Field(None, description="Sequential rank assigned during processing (e.g., for citation).") 

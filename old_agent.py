@@ -8,7 +8,6 @@ from collections import Counter
 from pydantic import ValidationError, HttpUrl
 from datetime import datetime 
 
-# --- Internal Imports (New Structure) ---
 from ..services.search import execute_batch_serper_search, SerperConfig
 from ..core.schemas import SearchResult, SearchTask
 from ..services.ranking import rerank_with_together_api
@@ -686,18 +685,14 @@ class DeepResearchAgent:
                 url_rank_map[link] = next_rank
                 next_rank += 1
             
-            item['rank'] = url_rank_map[link] # Assign the URL's rank to the item
+            item['rank'] = url_rank_map[link] 
             ranked_items.append(item)
             
-        # Sort the final list primarily by rank, then maybe by type (summary first) or score?
-        # Sorting ensures materials for the same source appear together in the prompt if needed,
-        # and keeps the final bibliography ordered correctly.
-        # Let's sort by rank, then put summaries before chunks for a given rank.
         def sort_key(item):
             rank = item.get('rank', float('inf'))
             type_priority = 0 if item.get('type') == 'summary' else 1 # Summary first
-            score = item.get('score', 0) # Higher score potentially earlier within chunks?
-            return (rank, type_priority, -score) # -score for descending score sort
+            score = item.get('score', 0) 
+            return (rank, type_priority, -score) 
 
         writer_context_items = sorted(ranked_items, key=sort_key)
         
@@ -1343,7 +1338,6 @@ class DeepResearchAgent:
             temp_url_rank_map: Dict[str, int] = {}
             next_rank_temp = 1
             # First pass to establish ranks for unique URLs if not already consistent
-            # (This also helps determine the true max_rank for validation)
             for item in writer_context_items:
                 link = item.get('link')
                 rank_from_item = item.get('rank') # Use rank assigned earlier
@@ -1398,13 +1392,11 @@ class DeepResearchAgent:
                     unique_valid_ranks = sorted(list(set(valid_ranks)))
                     return f"[{', '.join(map(str, unique_valid_ranks))}]"
             except ValueError:
-                # Log error if rank is not an integer
                 citation_errors.append(f"Non-integer rank found: '{ranks_str}'.")
                 self.logger.warning(f"Citation marker '{match.group(0)}' contained non-integer rank. Removing.")
-                return "" # Remove invalid marker
+                return "" 
 
         # Regex to find [[CITATION:rank1,rank2,...]] markers
-        # It allows spaces around the numbers and commas
         citation_pattern = re.compile(r"\[\[CITATION:\s*([\d\s,]+?)\s*\]\]")
         processed_draft = citation_pattern.sub(replace_citation_marker, report_draft)
 
@@ -1419,24 +1411,7 @@ class DeepResearchAgent:
         consulted_sources = {}
         if unique_sources_by_rank:
             self.logger.debug(f"Assembling final source list for {len(unique_sources_by_rank)} unique sources...")
-            # Use the pre-calculated unique_sources_by_rank map
-            # ranked_sources = {} # Old approach
-            # for item in writer_context_items:
-            #     rank = item.get('rank')
-            #     link = item.get('link') # Should be a string already
-            #     title = item.get('title', 'Untitled')
-            #     if rank is not None and link is not None:
-            #         # Store title and link associated with each rank
-            #         # If multiple items have the same rank (shouldn't happen), last one wins
-            #         if rank not in ranked_sources: # Store only the first title/link encountered for a rank
-            #             ranked_sources[rank] = {
-            #                 'title': title,
-            #                 'link': link
-            #             }
-            #     else:
-            #         self.logger.warning(f"Skipping item for source list due to missing rank or link: {item}")
 
-            # Sort by rank (key of the dict)
             sorted_ranks = sorted(unique_sources_by_rank.keys())
 
             reference_list_str = "\n\nSources Consulted:\n"

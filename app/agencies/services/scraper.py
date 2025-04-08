@@ -10,9 +10,9 @@ import logging
 import os # Needed for path operations with downloaded files
 # Removed unused: import re
 # Removed unused dataclass: from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Literal
 from urllib.parse import urlparse, urljoin
-from pydantic import HttpUrl # Add HttpUrl import
+from pydantic import BaseModel, Field, ConfigDict, HttpUrl # Add necessary Pydantic imports
 import httpx # <-- Import httpx for exception handling
 import fitz # PyMuPDF for PDF handling
 
@@ -30,21 +30,72 @@ from crawl4ai import (
     CrawlResult # Import CrawlResult for type hinting
 )
 
-# Import configuration and schemas
-from ..core.config import AppSettings
-from ..core.schemas import ExtractionResult # Import from schemas
+# Import configuration and schemas using absolute paths
+from app.core.config import AppSettings
+# --- REMOVED core schema import --- 
+# from app.core.schemas import ExtractionResult 
 
-# Import custom exceptions
-from ..core.exceptions import ScrapingError, ConfigurationError
+# Import custom exceptions using absolute paths
+from app.core.exceptions import ScrapingError, ConfigurationError
 
-# Import local modules for specialized scraping
-from .scraping_utils import pdf, wikipedia
+# Import local modules for specialized scraping (update relative path)
+# Assumes scraper_utils is moved alongside this file
+from .scraper_utils import wikipedia 
+# Removed reference to non-existent pdf module
 
 logger = logging.getLogger(__name__)
 
 # Removed load_dotenv() call
 
-# --- Removed local ExtractionResult dataclass --- #
+# --- ExtractionResult Schema Definition --- #
+class ExtractionResult(BaseModel):
+    """Represents the outcome of a content extraction attempt for a single URL."""
+    model_config = ConfigDict(extra='ignore') # Ignore extra fields if any during validation
+
+    source_url: HttpUrl = Field(..., description="The URL that was processed.")
+    content: Optional[str] = Field(None, description="The extracted text content. None if extraction failed or yielded no content.")
+    extraction_source: str = Field("unknown", description="Identifier for the source type or extraction method (e.g., 'crawl4ai', 'wikipedia', 'pdf_direct').")
+    error_message: Optional[str] = Field(None, description="Error message if extraction failed.")
+    status: Literal['success', 'empty', 'error'] = Field(..., description="Indicates the outcome: 'success' (content found), 'empty' (no content found/extracted), 'error' (an exception occurred).")
+
+# --- Helper Function for Local PDF Handling (Moved from non-existent pdf.py) --- #
+async def handle_local_pdf_file(file_path: str, max_size_bytes: Optional[int] = None) -> str:
+    """Extracts text content from a local PDF file.
+
+    Args:
+        file_path: Path to the local PDF file.
+        max_size_bytes: Optional maximum file size in bytes.
+
+    Returns:
+        Extracted text content.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ScrapingError: If the file is too large or cannot be processed by PyMuPDF.
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Local PDF file not found: {file_path}")
+
+    # Check size limit
+    if max_size_bytes is not None:
+        file_size = os.path.getsize(file_path)
+        if file_size > max_size_bytes:
+            logger.warning(f"Local PDF {file_path} ({file_size} bytes) exceeds max size ({max_size_bytes} bytes). Skipping.")
+            raise ScrapingError(f"Local PDF exceeds max size limit ({max_size_bytes / (1024*1024):.1f} MB)")
+
+    try:
+        logger.debug(f"Opening local PDF: {file_path}")
+        doc = fitz.open(file_path)
+        text_content = ""
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            text_content += page.get_text("text") + "\n\n" # Add space between pages
+        doc.close()
+        logger.debug(f"Successfully extracted text from local PDF: {file_path}")
+        return text_content.strip()
+    except Exception as e:
+        logger.error(f"Error processing local PDF file {file_path} with PyMuPDF: {e}", exc_info=True)
+        raise ScrapingError(f"Failed to process local PDF file {file_path}: {e}") from e
 
 # --- WebScraper Class --- #
 class WebScraper:
@@ -97,6 +148,59 @@ class WebScraper:
             f"Downloads Path: {getattr(self.browser_config, 'downloads_path', 'Default')}"
         )
 
+    async def _handle_direct_pdf_url(self, url: str, max_size_bytes: Optional[int]) -> str:
+        """Handles scraping directly linked PDF URLs."""
+        logger.debug(f"Handling direct PDF URL: {url}")
+        temp_pdf_path = None
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+                async with client.stream('GET', url) as response:
+                    response.raise_for_status() # Check for initial errors
+
+                    # Check content type if available
+                    content_type = response.headers.get('content-type', '').lower()
+                    if 'application/pdf' not in content_type:
+                        logger.warning(f"URL {url} Content-Type is not PDF ('{content_type}'). Skipping direct PDF handling.")
+                        raise ScrapingError(f"URL Content-Type is not application/pdf")
+
+                    # Check size limit before downloading fully
+                    content_length = response.headers.get('content-length')
+                    if content_length and max_size_bytes is not None:
+                        if int(content_length) > max_size_bytes:
+                            raise ScrapingError(f"Direct PDF URL content-length ({content_length}) exceeds max size ({max_size_bytes})")
+
+                    # Download to temp file (or memory)
+                    # Using a temporary file is safer for large files
+                    # TODO: Consider using tempfile module for better management
+                    temp_pdf_path = os.path.join(self.settings.scraper_pdf_save_dir, f"temp_{os.path.basename(urlparse(url).path)}")
+                    os.makedirs(os.path.dirname(temp_pdf_path), exist_ok=True)
+
+                    downloaded_size = 0
+                    with open(temp_pdf_path, 'wb') as f:
+                        async for chunk in response.aiter_bytes():
+                            downloaded_size += len(chunk)
+                            if max_size_bytes is not None and downloaded_size > max_size_bytes:
+                                raise ScrapingError(f"Direct PDF URL download exceeded max size ({max_size_bytes}) during streaming")
+                            f.write(chunk)
+
+            logger.info(f"Downloaded direct PDF from {url} to {temp_pdf_path}")
+            # Process the downloaded temp file
+            content = await handle_local_pdf_file(temp_pdf_path, max_size_bytes=None) # Already checked size
+            return content
+        except httpx.HTTPStatusError as e:
+            raise ScrapingError(f"HTTP Error {e.response.status_code} fetching direct PDF URL {url}") from e
+        except httpx.RequestError as e:
+            raise ScrapingError(f"Network Error fetching direct PDF URL {url}: {e}") from e
+        finally:
+            # Clean up temporary file
+            if temp_pdf_path and os.path.exists(temp_pdf_path):
+                try:
+                    os.remove(temp_pdf_path)
+                    logger.debug(f"Removed temporary PDF file: {temp_pdf_path}")
+                except OSError as e:
+                    logger.error(f"Error removing temporary PDF file {temp_pdf_path}: {e}")
+
+
     async def scrape(self, url: str, crawler: Optional[AsyncWebCrawler] = None) -> ExtractionResult:
         """
         Scrapes content from a single URL using specialized handlers or Crawl4AI.
@@ -143,10 +247,8 @@ class WebScraper:
             elif is_pdf_link:
                 try:
                     logger.info(f"Dispatching to PDF handler for direct URL: {url_str}")
-                    download_pdfs = self.settings.scraper_download_pdfs
-                    pdf_save_dir = self.settings.scraper_pdf_save_dir
-                    content = await pdf.handle_pdf_url(url_str, download_pdfs, pdf_save_dir, max_pdf_size_bytes)
-                    extraction_source = "pdf"
+                    content = await self._handle_direct_pdf_url(url_str, max_pdf_size_bytes)
+                    extraction_source = "pdf_direct"
                     logger.info(f"PDF handler successful for direct URL: {url_str}")
                 except ScrapingError as e:
                     logger.error(f"PDF handling failed for direct URL {url_str}: {e}", exc_info=False)
@@ -158,10 +260,8 @@ class WebScraper:
             # 3. General Web Crawling with Crawl4AI
             else:
                 logger.info(f"Dispatching to general web crawler (Crawl4AI): {url_str}")
-                # --- Add detailed logging for the passed crawler instance ---
                 crawler_id = id(crawler) if crawler else None
                 logger.debug(f"scrape() called for {url_str}. Passed crawler object ID: {crawler_id}. Is crawler None? {crawler is None}")
-                # -------------------------------------------------------------
                 try:
                     run_config = CrawlerRunConfig(cache_mode=CacheMode.BYPASS)
                     crawl4ai_result: Optional[CrawlResult] = None
@@ -179,20 +279,16 @@ class WebScraper:
                         except Exception as e:
                             logger.error(f"Crawl4AI encountered an unexpected error during arun for {url_str} (Crawler ID: {instance_id}): {e}", exc_info=True)
 
-                    # --- Add logging just before the 'if crawler:' check ---
                     logger.debug(f"Checking 'if crawler:' condition for {url_str}. Passed crawler object ID: {crawler_id}. Is crawler None? {crawler is None}")
-                    # -----------------------------------------------------
                     if crawler:
-                        # Use the provided, already initialized crawler instance
                         logger.debug(f"Using provided crawler (ID: {crawler_id}) for {url_str}.")
                         await run_crawl_logic(crawler)
                     else:
-                        # Create and manage a temporary crawler instance for this single scrape
-                        logger.debug(f"Creating temporary AsyncWebCrawler for single URL: {url_str}.") # This line should ideally not be hit when called from scrape_many
+                        logger.debug(f"Creating temporary AsyncWebCrawler for single URL: {url_str}.")
                         async with AsyncWebCrawler(config=self.browser_config) as temp_crawler:
                             await run_crawl_logic(temp_crawler)
 
-                    # --- Process results (using crawl4ai_result) ---
+                    # Process results
                     downloaded_pdf_path: Optional[str] = None
                     if crawl4ai_result and hasattr(crawl4ai_result, 'downloaded_files') and crawl4ai_result.downloaded_files:
                         downloaded_files_list = crawl4ai_result.downloaded_files if isinstance(crawl4ai_result.downloaded_files, list) else []
@@ -206,7 +302,7 @@ class WebScraper:
                     if downloaded_pdf_path:
                         logger.info(f"Processing downloaded PDF from Crawl4AI using handle_local_pdf_file: {downloaded_pdf_path}")
                         try:
-                            content = await pdf.handle_local_pdf_file(downloaded_pdf_path, max_size_bytes=max_pdf_size_bytes)
+                            content = await handle_local_pdf_file(downloaded_pdf_path, max_size_bytes=max_pdf_size_bytes)
                             extraction_source = "pdf_downloaded_by_crawl4ai"
                             if content:
                                 logger.info(f"Successfully extracted text from downloaded PDF: {downloaded_pdf_path}")
@@ -233,7 +329,6 @@ class WebScraper:
                         content = crawl4ai_result.markdown
                         extraction_source = crawl4ai_result.name if hasattr(crawl4ai_result, 'name') else "crawl4ai_markdown"
                     else:
-                        # Handle cases where crawl4ai_result is None or lacks content/markdown
                         if crawl4ai_result is None:
                              logger.warning(f"Crawl4AI processing failed or was skipped for {url_str}.")
                              extraction_source = "crawl4ai_failed_or_skipped"
@@ -243,95 +338,80 @@ class WebScraper:
                         content = None
 
                 except Exception as e:
-                    # Catch errors specifically within the general crawling dispatch logic itself (before arun)
                     logger.error(f"Unexpected error during general crawling setup for {url_str}: {e}", exc_info=True)
                     raise ScrapingError(f"General web crawling setup failed for {url_str}: {e}") from e
 
-            # --- Final Result Construction --- #
-            if content and content.strip():
-                logger.info(f"Scraping successful for {url_str} using strategy: {extraction_source} (Content length: {len(content)})")
-                return ExtractionResult(name=extraction_source, link=url_str, content=content)
+            # Final Result Construction
+            if content is None:
+                logger.warning(f"Scraping {url_str} resulted in no content (Source: {extraction_source}).")
             else:
-                # Refined logging for extraction failure
-                error_message = f"No content could be extracted by final strategy: {extraction_source}."
-                if extraction_source == "pdf_download_processed_empty":
-                    error_message += " PDF was downloaded but processing yielded no content."
-                elif extraction_source == "crawl4ai_failed_or_skipped":
-                     error_message += " Crawl4AI execution failed or was skipped due to earlier errors."
-                elif extraction_source == "crawl4ai_empty_result":
-                     error_message += " Crawl4AI executed but returned no usable content or markdown."
+                logger.info(f"Successfully scraped content from {url_str} (Source: {extraction_source}, Length: {len(content)})")
 
+            return ExtractionResult(
+                content=content,
+                source_url=url_str,
+                status="success" if content is not None else "empty",
+                extraction_source=extraction_source
+            )
 
-                logger.warning(f"Extraction failed for URL {url_str}: {error_message}")
-                return ExtractionResult(name=extraction_source, link=url_str, content=None, error=f"No content extracted ({extraction_source})")
-
-        except (ValueError, ScrapingError, ConfigurationError) as e:
-             logger.error(f"Scraping failed for {url_str}: {type(e).__name__}: {e}", exc_info=False)
-             # Return an ExtractionResult with error status instead of raising here
-             # This allows scrape_many to collect individual errors
-             return ExtractionResult(name="scraping_error", link=url_str, content=None, error=f"{type(e).__name__}: {e}")
         except Exception as e:
-            logger.critical(f"Critical unexpected error during scrape() for {url_str}: {e}", exc_info=True)
-            # Return an ExtractionResult with error status
-            return ExtractionResult(name="unexpected_critical_error", link=url_str, content=None, error=f"Unexpected critical error: {e}")
+            logger.error(f"Scraping failed for URL: {url_str}. Error: {e}", exc_info=True)
+            return ExtractionResult(
+                content=None,
+                source_url=url_str,
+                status="error",
+                error_message=str(e),
+                extraction_source=extraction_source # Record where it failed
+            )
 
-    # --- Refactored scrape_many ---
     async def scrape_many(
         self,
         urls: List[str],
         sequential: bool = False # Default back to False, allowing concurrency
     ) -> Dict[str, ExtractionResult]:
-        if not urls:
-            return {}
+        """
+        Scrapes multiple URLs, potentially concurrently using a shared Crawl4AI instance.
 
+        Args:
+            urls: A list of URLs to scrape.
+            sequential: If True, scrape URLs one by one. If False (default), use concurrency.
+
+        Returns:
+            A dictionary mapping each URL to its ExtractionResult.
+        """
         results: Dict[str, ExtractionResult] = {}
-        total_urls = len(urls)
+        if not urls:
+            return results
 
-        # Create a single crawler instance to be reused
-        async with AsyncWebCrawler(config=self.browser_config) as shared_crawler:
-            if sequential:
-                logger.info(f"Processing {total_urls} URLs sequentially using shared crawler...")
-                for i, url in enumerate(urls):
-                    logger.debug(f"Scraping URL {i+1}/{total_urls} (sequential): {url}")
-                    # Call scrape, passing the shared crawler instance
-                    results[url] = await self.scrape(url, crawler=shared_crawler)
-            else:
-                logger.info(f"Processing {total_urls} URLs concurrently using shared crawler...")
-                # Create tasks, passing the shared crawler instance to each scrape call
-                tasks = {url: asyncio.create_task(self.scrape(url, crawler=shared_crawler)) for url in urls}
-
-                task_results = await asyncio.gather(*tasks.values()) # No return_exceptions needed if scrape handles them
-
-                url_list = list(tasks.keys())
-                for i, result_or_exc in enumerate(task_results):
-                    url = url_list[i]
-                    # Since scrape now returns ExtractionResult even on error, just assign it
-                    if isinstance(result_or_exc, ExtractionResult):
-                         results[url] = result_or_exc
-                    else: # Should not happen if scrape is correctly implemented
-                         logger.error(f"Unexpected return type from scrape task for URL '{url}': {type(result_or_exc)}")
-                         results[url] = ExtractionResult(name="internal_error", link=url, content=None, error=f"Unexpected return type: {type(result_or_exc)}")
-
-
-        # Post-processing: Log summary of errors encountered
-        exceptions_count = sum(1 for res in results.values() if res.error)
-        if exceptions_count > 0:
-            logger.warning(f"Completed scraping batch for {total_urls} URLs with {exceptions_count} failures.")
-            # Optionally log specific failed URLs
-            for url, res in results.items():
-                 if res.error:
-                      logger.debug(f"  - Failed URL: {url} (Error: {res.error})")
+        if sequential:
+            logger.info(f"Starting sequential scraping for {len(urls)} URLs.")
+            for url in urls:
+                # Create a temporary crawler for each URL in sequential mode
+                results[url] = await self.scrape(url, crawler=None)
         else:
-             logger.info(f"Successfully completed scraping batch for {total_urls} URLs.")
+            logger.info(f"Starting concurrent scraping for {len(urls)} URLs.")
+            # Use a shared crawler instance for concurrent runs
+            async with AsyncWebCrawler(config=self.browser_config) as shared_crawler:
+                tasks = [self.scrape(url, crawler=shared_crawler) for url in urls]
+                scrape_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        return results
+                for i, result_or_exc in enumerate(scrape_results):
+                    url = urls[i]
+                    if isinstance(result_or_exc, ExtractionResult):
+                        results[url] = result_or_exc
+                    elif isinstance(result_or_exc, Exception):
+                        logger.error(f"Concurrent scraping task for {url} failed with exception: {result_or_exc}", exc_info=False) # Don't log full trace for gather errors
+                        results[url] = ExtractionResult(
+                            content=None,
+                            source_url=url,
+                            status="error",
+                            error_message=f"Scraping task failed: {result_or_exc}",
+                            extraction_source="scrape_many_gather_error"
+                        )
+                    else:
+                        # Should not happen with return_exceptions=True
+                        logger.error(f"Unexpected item in asyncio.gather results for {url}: {result_or_exc}")
+                        results[url] = ExtractionResult(content=None, source_url=url, status="error", error_message="Unexpected result type from gather")
 
-# Removed old helper methods (_fetch_raw_html, extract)
-# Removed old classes/functions (StrategyFactory, ExtractionConfig, HTML cleaners, is_academic_url)
-
-# Example usage can be added here if needed
-# if __name__ == "__main__":
-#     async def main():
-#         # ... example setup and calls ...
-#         pass
-#     asyncio.run(main()) 
+        logger.info(f"Finished scraping {len(urls)} URLs.")
+        return results 

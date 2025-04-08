@@ -9,14 +9,22 @@ import httpx # Using httpx for async API calls
 import asyncio # For testing
 import random # For jitter
 
-# Import custom exceptions from the core module
-from ..core.exceptions import ConfigurationError, RankingAPIError
+# Pydantic for local type definition
+from pydantic import BaseModel
+
+# Import custom exceptions using absolute path
+from app.core.exceptions import ConfigurationError, RankingAPIError
 
 # Configure logger
 logger = logging.getLogger(__name__)
 
 # Default Base URL for Together API
 TOGETHER_API_BASE = os.getenv("TOGETHER_API_BASE", "https://api.together.ai")
+
+# Define the output structure for a ranked item
+class RankedItem(BaseModel):
+    index: int
+    score: float
 
 async def rerank_with_together_api(
     query: str,
@@ -28,7 +36,7 @@ async def rerank_with_together_api(
     timeout: int = 20,
     max_retries: int = 2, # e.g., 0=initial try, 1=retry1, 2=retry2 (total 3 attempts)
     initial_delay_s: float = 1.0
-) -> List[Dict[str, Any]]: # Returns list of dicts: {'index': int, 'score': float}
+) -> List[RankedItem]: # Updated return type hint
     """
     Reranks a list of document strings based on a query using the Together Rerank API.
 
@@ -47,7 +55,7 @@ async def rerank_with_together_api(
         initial_delay_s: Initial delay in seconds before the first retry.
 
     Returns:
-        A list of dictionaries, each containing the original 'index' of the document 
+        A list of RankedItem instances, each containing the original 'index' of the document 
         in the input list and its 'score'. The list is sorted by score (descending) 
         and only includes documents meeting the relevance_threshold.
 
@@ -123,7 +131,8 @@ async def rerank_with_together_api(
                         continue
                         
                     if score_float >= relevance_threshold:
-                        formatted_results.append({"index": index, "score": score_float})
+                        # Create RankedItem instance
+                        formatted_results.append(RankedItem(index=index, score=score_float))
                     else:
                         logger.debug(f"Filtering out document index {index} with score {score_float:.4f} (below threshold {relevance_threshold})")
 

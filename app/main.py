@@ -189,7 +189,8 @@ app.include_router(
 allowed_origins = [
     "https://odr-frontend.vercel.app",
     # Add other allowed origins like localhost for development
-    "http://localhost:3000", 
+    "https://odr.luminarysolutions.ai",
+    #"http://localhost:3000", 
     #"http://127.0.0.1:3000",
     #"http://localhost:5173"
 ]

@@ -120,13 +120,22 @@ class WebSocketUpdateHandler:
             {"error": str(error)}
         )
 
+    # --- Scraping Phase Update (New) ---
+    async def scraping_start(self, url_count: int):
+        await self._send_update(
+            "SCRAPING",
+            "START",
+            f"Fetching content for {url_count} unique sources...",
+            {"url_count": url_count}
+        )
+
     # --- Source Processing Phase Updates (Overall) ---
-    async def processing_start(self, urls_to_process: int):
+    async def processing_start(self, sources_to_process: int):
         await self._send_update(
             "PROCESSING",
             "START",
-            f"Starting source processing for {urls_to_process} URLs (summaries & chunks)...",
-            {"urls_to_process": urls_to_process}
+            f"Processing fetched content for {sources_to_process} sources (summaries & chunks)...",
+            {"sources_to_process": sources_to_process}
         )
 
     async def processing_end(self, processed_source_count: int, total_context_items: int):

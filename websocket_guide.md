@@ -22,6 +22,24 @@ All messages sent from the server **still follow the same fundamental JSON struc
 
 **Key Change:** With the new architecture, the backend orchestrator function now receives a callback and sends *all* progress updates directly via this callback. This means updates are more granular and tied directly to the orchestrator's internal steps.
 
+## ⚠️ Handling Disconnects and Task Persistence
+
+**Important:** By default, the backend research task initiated via this WebSocket connection **continues running even if the client disconnects**. The connection dropping does **not** automatically stop the server-side process.
+
+This has the following implications for the frontend client:
+
+1.  **Store the `task_id`:** The client **must** reliably store the `task_id` received in the `INITIALIZING`/`TASK_ID` message. This ID is the only way to reference the task later.
+2.  **No Reconnection for Same Task:** If the WebSocket disconnects, the client **cannot** simply reconnect to the `/deep_research/ws/research` endpoint and expect to receive further updates for the *original* task. A new connection will always start a *new* task instance.
+3.  **Use REST for Status/Results:** To check the status or retrieve the final result of a task that may have continued after a disconnect, the client **must** use the stored `task_id` to poll the REST endpoint:
+    *   `GET /deep_research/result/{task_id}`
+4.  **Interpret REST Response:** The client should examine the JSON response from the GET endpoint:
+    *   Check the `status` field (`PENDING`, `PROCESSING`, `COMPLETE`, `ERROR`, `CANCELLED`).
+    *   If `PROCESSING`, wait and poll again later.
+    *   If `COMPLETE`, the full result (report, usage stats) will be available in the `result` field of the response.
+    *   If `ERROR` or `CANCELLED`, handle accordingly, potentially displaying the `error` or `stoppedReason` field.
+
+This polling mechanism ensures the client can retrieve the outcome of long-running tasks even if the initial WebSocket connection is interrupted.
+
 ## Possible `step` Values
 
 The `step` field indicates the current phase of the research process. This list reflects the steps explicitly sent by the new callback handler:

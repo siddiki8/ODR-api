@@ -388,11 +388,13 @@ def format_report_citations(report_content: str, logger: logging.Logger) -> str:
         links = []
         for num_str in map(str.strip, numbers_str.split(',')):
             if num_str.isdigit():
-                links.append(f"[{num_str}](#ref-{num_str})")
+                # Keep only the number, maybe formatted as plain text bracket
+                links.append(f"{num_str}")
             else:
                 logger.warning(f"Found non-digit citation number '{num_str}' in marker: {match.group(0)}")
-                links.append(f"[{num_str}]") # Include as non-link
-        return ", ".join(links)
+                links.append(f"{num_str}") # Keep non-digit as is
+        # Return a plain text representation like [1, 2]
+        return f"[{', '.join(links)}]"
 
     citation_pattern = r"\[\[CITATION:(\d+(?:s*,\s*\d+)*)\]\]"
     try:
@@ -422,9 +424,9 @@ def generate_reference_list(unique_sources: Dict[str, Dict[str, Any]], logger: l
                 ref_num = source_info['ref_num']
                 title = source_info.get('title', 'Unknown Title')
                 link = source_info.get('link', '#')
-                # Add HTML anchor tag before the number (Fixed f-string)
-                reference_list_content += f"<a name=\"ref-{ref_num}\"></a>{ref_num}. {title} ({link})\n"
-            logger.info(f"Generated reference list with {len(sorted_sources)} unique sources and anchors.")
+                # Use standard Markdown link format, remove HTML anchor
+                reference_list_content += f"{ref_num}. [{title}]({link})\n"
+            logger.info(f"Generated reference list with {len(sorted_sources)} unique sources using Markdown links.")
         except Exception as e:
             logger.error(f"Failed during reference list generation: {e}", exc_info=True)
             # Return a minimal list or indicate error?

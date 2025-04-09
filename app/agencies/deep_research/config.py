@@ -17,7 +17,7 @@ class DeepResearchConfig(BaseSettings):
     # Loadable from env vars like DEEP_RESEARCH_PLANNER_MODEL_ID
     planner_model_id: str = Field(default="openrouter/quasar-alpha")
     summarizer_model_id: str = Field(default="openrouter/quasar-alpha")
-    writer_model_id: str = Field(default="google/gemini-2.5-pro-preview-03-25")
+    writer_model_id: str = Field(default="google/gemini-2.0-flash-001")
     refiner_model_id: str = Field(default="openrouter/quasar-alpha")
     
     # --- Reranker --- 

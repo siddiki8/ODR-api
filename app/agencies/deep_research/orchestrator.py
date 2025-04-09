@@ -36,6 +36,9 @@ from app.core.config import AppSettings
 # Import the new RunUsage tracker
 from app.core.schemas import RunUsage, UsageStatistics, TokenUsageCounter, SearchTask
 
+# --- Add Firestore DocumentReference type --- #
+from google.cloud.firestore_v1.document import DocumentReference
+from firebase_admin import firestore # To access SERVER_TIMESTAMP
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +52,10 @@ async def run_deep_research_orchestration(
     config: DeepResearchConfig,
     app_settings: AppSettings,
     # Add the callback handler parameter
-    update_callback: Optional[WebSocketUpdateHandler] = None
+    update_callback: Optional[WebSocketUpdateHandler] = None,
+    # Add Firestore parameters
+    task_doc_ref: Optional[DocumentReference] = None,
+    firestore_available: bool = False
 ) -> schemas.ResearchResponse:
     """
     Orchestrates the deep research multi-agent process.
@@ -98,14 +104,32 @@ async def run_deep_research_orchestration(
                  f"but returned {type(planner_output)}. Check model compatibility and prompt compliance."
              )
 
+        # --- Update Firestore with Plan --- #
+        if firestore_available and task_doc_ref:
+            try:
+                plan_update_data = {
+                    "writingPlan": planner_output.model_dump(mode='json'),
+                    "initialSearchTaskCount": len(planner_output.search_tasks),
+                    "status": "PLANNING_COMPLETE", # Or a more specific status
+                    "updatedAt": firestore.SERVER_TIMESTAMP
+                }
+                task_doc_ref.update(plan_update_data)
+                logger.info(f"Updated Firestore with research plan.")
+            except Exception as fs_e:
+                logger.error(f"Failed to update Firestore with plan: {fs_e}")
+        # --- End Firestore Update --- #
+
         search_tasks: List[SearchTask] = planner_output.search_tasks
         writing_plan: schemas.WritingPlan = planner_output.writing_plan
         logger.info(f"Planner generated {len(search_tasks)} search tasks and a writing plan.")
         if update_callback:
+            # Extract query strings for the callback
+            query_strings = [task.query for task in search_tasks if task.query]
             plan_details = {
                 "plan": {
-                    "writing_plan": writing_plan.model_dump(mode='json'), # Use model_dump for serialization
-                    "search_task_count": len(search_tasks)
+                    "writing_plan": writing_plan.model_dump(mode='json'),
+                    "search_task_count": len(search_tasks),
+                    "search_queries": query_strings # Add the actual queries here
                 }
             }
             await update_callback.planning_end(plan_details)
@@ -224,6 +248,10 @@ async def run_deep_research_orchestration(
     scraped_data: Dict[str, ExtractionResult] = {}
     if urls_to_scrape:
         logger.info(f"Batch scraping {len(urls_to_scrape)} unique URLs...")
+        # --- Call scraping_start callback ---
+        if update_callback:
+            await update_callback.scraping_start(len(urls_to_scrape))
+        # --- End call ---
         scraped_data = await batch_scrape_urls_helper(
             urls=urls_to_scrape,
             settings=app_settings,
@@ -231,6 +259,20 @@ async def run_deep_research_orchestration(
         )
     else:
         logger.info("No URLs to scrape.")
+        # Optional: Send a scraping update even if none? Or skip?
+        # if update_callback:
+        #     await update_callback.scraping_start(0)
+
+    # --- Call processing_start AFTER scraping --- #
+    # Determine how many sources *might* be processed (those successfully scraped)
+    potentially_processable_sources = set()
+    for url, result in scraped_data.items():
+        if result.status == 'success' and result.content:
+            potentially_processable_sources.add(url)
+
+    if update_callback:
+        await update_callback.processing_start(len(potentially_processable_sources))
+    # --- End call --- #
 
     # --- Summarization Path (Top Results) --- #
     logger.info(f"Processing {len(top_results_for_summary)} sources for summary...")
@@ -461,6 +503,24 @@ async def run_deep_research_orchestration(
 
     logger.info(f"Source processing complete. Collected {len(all_source_materials)} items from {len(unique_sources)} unique sources.")
 
+    # --- Update Firestore with Sources --- #
+    if firestore_available and task_doc_ref:
+        try:
+            # Convert unique_sources dict to a list of dicts for Firestore
+            sources_list = list(unique_sources.values()) if unique_sources else []
+
+            source_update_data = {
+                "sources": sources_list,
+                "sourceCount": len(sources_list),
+                "status": "PROCESSING_COMPLETE", # Or a more specific status
+                "updatedAt": firestore.SERVER_TIMESTAMP
+            }
+            task_doc_ref.update(source_update_data)
+            logger.info(f"Updated Firestore with {len(sources_list)} unique sources.")
+        except Exception as fs_e:
+            logger.error(f"Failed to update Firestore with sources: {fs_e}")
+    # --- End Firestore Update --- #
+
     # === Context Token Limiting ===
     if all_source_materials:
         logger.info(f"Limiting writer context to ~{MAX_WRITER_CONTEXT_TOKENS} tokens...")
@@ -637,16 +697,18 @@ async def run_deep_research_orchestration(
              logger.info(f"Writer requested {len(requested_searches)} additional searches.")
 
     else: # All retries failed
-        # Log the final error and return an error response
+        # Log the final error, send callback, set placeholder draft, and prevent refinement
         final_error_msg = f"Writer Agent Critical Error (Initial Draft after {max_writer_retries} retries): {writer_exception}"
         logger.error(final_error_msg, exc_info=writer_exception if isinstance(writer_exception, Exception) else False)
         if update_callback:
             # Pass the last known exception to the callback
             await update_callback.writing_error(writer_exception or Exception("Writer failed after retries"))
-        return schemas.ResearchResponse(
-            report=final_error_msg,
-            usage_statistics=usage_tracker.get_statistics()
-        )
+
+        # Set placeholder draft and prevent refinement loop
+        current_draft = f"**Warning:** The report writer failed to generate content after {max_writer_retries} attempts. The error was: {writer_exception}. Please see the reference list below for collected sources."
+        requested_searches = None
+        logger.warning("Proceeding to final assembly without a generated report draft due to writer failure.")
+        # NOTE: Do not return here, continue to final assembly
 
     # === Step 5: Refinement Loop ===
     refinement_loop_count = 0
@@ -977,7 +1039,10 @@ async def run_deep_research_orchestration_wrapper(
     agents_collection: agents.AgencyAgents,
     config: DeepResearchConfig,
     app_settings: AppSettings,
-    update_callback: Optional[WebSocketUpdateHandler] = None
+    update_callback: Optional[WebSocketUpdateHandler] = None,
+    # Add Firestore parameters to wrapper
+    task_doc_ref: Optional[DocumentReference] = None,
+    firestore_available: bool = False
 ) -> schemas.ResearchResponse:
     try:
         return await run_deep_research_orchestration(
@@ -985,7 +1050,10 @@ async def run_deep_research_orchestration_wrapper(
             agents_collection=agents_collection,
             config=config,
             app_settings=app_settings,
-            update_callback=update_callback
+            update_callback=update_callback,
+            # Pass Firestore parameters through
+            task_doc_ref=task_doc_ref,
+            firestore_available=firestore_available
         )
     except Exception as e:
         logger.critical(f"CRITICAL UNHANDLED ERROR during orchestration: {e}", exc_info=True)

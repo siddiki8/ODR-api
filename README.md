@@ -11,7 +11,7 @@
 
 **Developed by [Luminary AI Solutions LLC](https://luminarysolutions.ai)**
 
-**The Open Deep Research API Framework provides a powerful, modular, multi-agency foundation for building sophisticated AI-powered research systems.** Instead of a single monolithic application, this framework allows you to create distinct `Agencies` (e.g., Deep Research, Financial Analysis, Code Review), each orchestrating multiple specialized Large Language Model (LLM) `Agents`. Agencies leverage shared core `Services` for web search, advanced content scraping, chunking, and ranking to generate comprehensive, cited reports, often streamed over WebSockets.
+**The Open Deep Research API Framework provides a powerful, modular, multi-agency foundation for building sophisticated AI-powered research systems.** Instead of a single monolithic application, this framework allows you to create distinct `Agencies` (e.g., Deep Research, Financial Analysis, Code Review), each orchestrating multiple specialized Large Language Model (LLM) `Agents`. Agencies leverage shared core `tools` for LLMs to invoke (currently no tools are implemented) and `Services` to be invoked programatically. Currently implemented are web search, advanced content scraping, chunking, and ranking to generate comprehensive, cited reports, often streamed over WebSockets.
 
 **Build Your Own Research AI!** This framework is designed for extension. Easily add new agencies, agents, or services to tackle diverse research domains.
 
@@ -19,7 +19,7 @@
 
 *   **Highly Modular Design:** Built for extension! Easily add new specialized research `Agencies` (e.g., for finance, legal) in `app/agencies/` or enhance existing ones with new `Agents`.
 *   **Multi-Agency Architecture:** Organizes research tasks using specialized `Agencies`. Each agency runs independently with its own set of agents and orchestration logic.
-*   **Shareable Core Services:** Common tasks like web search (`app/services/search`), content scraping (`app/services/scraper`), text chunking (`app/services/chunking`), PDF handling (`app/services/scraping_utils`), and ranking (`app/agencies/services/ranking.py`) are isolated in `app/services/` or `app/agencies/services/`, ready to be reused by any agency.
+*   **Shareable Core Tools and Services:** Common tasks like web search (`app/services/search`), content scraping (`app/services/scraper`), text chunking (`app/services/chunking`), PDF handling (`app/services/scraping_utils`), and ranking (`app/agencies/services/ranking.py`) are isolated in `app/services/` or `app/agencies/services/`, ready to be reused by any agency. an LLM tool directory is also implemented but currently no tools are implemented.
 *   **Agency-Specific Orchestration:** Each agency defines its own workflow logic in its `orchestrator.py` file, allowing for diverse and complex research processes tailored to the domain.
 *   **Clear Agent Roles:** Agents within an agency typically have defined responsibilities (e.g., Planning, Summarizing, Writing, Refining), simplifying development, testing, and maintenance (`app/agencies/<agency_name>/agents.py`).
 *   **Structured LLM Interaction:** Leverages Pydantic (`app/core/schemas.py`, `app/agencies/<agency_name>/schemas.py`) to define clear input/output schemas for LLM agents, ensuring reliable and validated data flow.
@@ -64,7 +64,8 @@ This detailed workflow is specific to the `deep_research` agency; other agencies
 *   **Framework:** [FastAPI](https://fastapi.tiangolo.com/)
 *   **Data Validation & Settings:** [Pydantic](https://docs.pydantic.dev/) V2
 *   **LLM Interaction:** Primarily OpenAI API client (via libraries like `openai` or potentially routing services like OpenRouter), adaptable for others supporting structured output (JSON mode/Tool Calling). Pydantic enforces output structure.
-*   **Multi-Agency Orchestration:** Custom logic within `app/agencies/`
+*   **Multi-Agency Orchestration:** Custom logic or Pydantic-AI within `app/agencies/`
+*   **LLM tools** To be implemented with Pydantic-AI in future agencies.
 *   **Web Scraping:** [Crawl4AI](https://github.com/extractus/crawl4ai) (via `app/services/scraper/`)
 *   **PDF Parsing:** [MarkItDown](https://github.com/microsoft/markitdown) (via Crawl4AI or directly in `app/services/scraping_utils/`)
 *   **Web Search:** [Serper API](https://serper.dev/) (via `app/services/search/`)

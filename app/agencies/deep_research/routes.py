@@ -5,6 +5,8 @@ import traceback
 import uuid
 from typing import Dict, Any, Optional
 
+# --- Add Firestore Client type --- #
+from google.cloud.firestore_v1.client import Client
 from fastapi import APIRouter, Depends, HTTPException, Path, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
 from firebase_admin import firestore
@@ -36,9 +38,9 @@ from .callbacks import WebSocketUpdateHandler # Import the handler
 # TODO: Refactor db and active_tasks to a shared module (e.g., app.core.state)
 # For now, import directly from main to get things working
 # from app.main import get_settings, get_api_keys # No longer import from main
-from app.core.state import db, active_tasks # Import from the new state module
+from app.core.state import active_tasks # Import ONLY active_tasks from the new state module
 # Import dependencies from the new core dependencies file
-from app.core.dependencies import get_settings, get_api_keys
+from app.core.dependencies import get_settings, get_api_keys, get_firestore_db # Add get_firestore_db
 
 # Configure logger for this module
 logger = logging.getLogger(__name__)
@@ -88,12 +90,17 @@ async def websocket_research_route(
     settings: AppSettings = Depends(get_settings),
     # api_keys: ApiKeys = Depends(get_api_keys), # Needed by get_agency_agents
     agency_config: DeepResearchConfig = Depends(get_deep_research_config),
-    agents_collection: AgencyAgents = Depends(get_agency_agents)
+    agents_collection: AgencyAgents = Depends(get_agency_agents),
+    db: Optional[Client] = Depends(get_firestore_db) # Inject Firestore DB
 ):
     """
     WebSocket endpoint to initiate and monitor a deep research task
     using the multi-agent orchestration flow.
     """
+    # --- Remove Debug Log ---
+    # logger.info(f"WebSocket handler db object exists: {db is not None}")
+    # --- End Debug Log ---
+
     task_id = uuid.uuid4()
     task_id_str = str(task_id)
     connection_active = True # Flag to manage sending messages only if active
@@ -131,20 +138,24 @@ async def websocket_research_route(
     # Pass the raw send function to the handler
     callback_handler = WebSocketUpdateHandler(send_status_update)
 
-    # --- Firestore Setup ---
+    # --- Firestore Setup --- #
+    # DB is now injected via Depends(get_firestore_db)
     task_doc_ref = None
-    firestore_available_this_request = False
-    if db:
+    firestore_available_this_request = False # Flag still useful for logic
+    if db is not None: # Check if the dependency returned a client
         try:
             # Collection name should probably be configurable or standardized
-            task_doc_ref = agency_config.db.collection("research_tasks").document(task_id_str)
+            task_doc_ref = db.collection("research_tasks").document(task_id_str)
             firestore_available_this_request = True
-            logger.debug(f"[WS Task ID: {task_id_str}] Firestore document reference obtained.")
+            logger.debug(f"[WS Task ID: {task_id_str}] Firestore document reference obtained via dependency.")
         except Exception as e:
-            logger.error(f"[WS Task ID: {task_id_str}] Failed to get Firestore document reference: {e}. Firestore disabled for this request.")
+            # This block might be less likely if get_firestore_db handles init errors
+            logger.error(f"[WS Task ID: {task_id_str}] Failed to get Firestore document reference from injected db: {e}. Firestore may be disabled.")
             task_doc_ref = None
+            firestore_available_this_request = False
     else:
-        logger.warning(f"[WS Task ID: {task_id_str}] Global Firestore client (db) is not initialized. Firestore disabled for this request.")
+        # This means get_firestore_db returned None (initialization failed)
+        logger.warning(f"[WS Task ID: {task_id_str}] Firestore client (db) could not be initialized via dependency. Firestore disabled for this request.")
 
     try:
         # 1. Receive and validate initial research request parameters
@@ -182,7 +193,7 @@ async def websocket_research_route(
         await callback_handler._send_update("INITIALIZING", "TASK_ID", "Task ID assigned.", {"task_id": task_id_str})
 
         # *** Create Initial Firestore Document ***
-        if firestore_available_this_request:
+        if firestore_available_this_request and task_doc_ref:
             try:
                 # Note: Overrides from CoreResearchRequest might not directly map to AgencyConfig
                 # We might need a translation layer or adjust AgencyConfig/Orchestrator initialization
@@ -202,7 +213,8 @@ async def websocket_research_route(
                 logger.info(f"[WS Task ID: {task_id_str}] Initial Firestore document created.")
             except Exception as e:
                 logger.error(f"[WS Task ID: {task_id_str}] Failed to create initial Firestore document: {e}")
-                firestore_available_this_request = False
+                # Do not disable Firestore for the rest of the request if initial set fails
+                # firestore_available_this_request = False
 
         # 2. Dependencies are already injected (agents_collection, agency_config, settings)
         # Orchestrator will send STARTING/START via callback
@@ -213,7 +225,7 @@ async def websocket_research_route(
         logger.info(f"[WS Task ID: {task_id_str}] Starting deep research orchestration...")
 
         # *** Update Firestore Status before run ***
-        if firestore_available_this_request:
+        if firestore_available_this_request and task_doc_ref:
             try:
                 task_doc_ref.update({"status": "PROCESSING", "startedAt": firestore.SERVER_TIMESTAMP})
                 logger.info(f"[WS Task ID: {task_id_str}] Updated Firestore status to PROCESSING.")
@@ -235,7 +247,10 @@ async def websocket_research_route(
                     agents_collection=agents_collection,
                     config=agency_config,
                     app_settings=settings, # Pass AppSettings from dependencies
-                    update_callback=callback_handler # Pass the handler instance
+                    update_callback=callback_handler, # Pass the handler instance
+                    # --- Pass Firestore details --- #
+                    task_doc_ref=task_doc_ref,
+                    firestore_available=firestore_available_this_request
                 )
             )
             # Use the global active_tasks from main.py (temporary)
@@ -249,31 +264,31 @@ async def websocket_research_route(
             # If successful, the orchestrator returns the ResearchResponse
             logger.info(f"[WS Task ID: {task_id_str}] Orchestration task completed successfully.")
 
-            if research_result_response:
-                logger.info(f"[WS Task ID: {task_id_str}] Final report length: {len(research_result_response.report)}")
-                logger.debug(f"[WS Task ID: {task_id_str}] Usage stats: {research_result_response.usage_statistics}")
+            # *** Add explicit check log ***
+            logger.info(f"[WS Task ID: {task_id_str}] Checking Firestore availability flag before final save: {firestore_available_this_request}")
 
-                # Final COMPLETE/END message is now sent by the orchestrator via the callback handler
-                # before it returns the result.
-
-                # *** Store Successful Result in Firestore ***
-                if firestore_available_this_request:
-                    try:
-                        update_payload = {
-                            "status": "COMPLETE",
-                            "result": research_result_response.model_dump(), # Store the full response
-                            "completedAt": firestore.SERVER_TIMESTAMP
-                        }
-                        task_doc_ref.update(update_payload)
-                        logger.info(f"[WS Task ID: {task_id_str}] Stored successful result in Firestore.")
-                    except Exception as e:
-                        logger.error(f"[WS Task ID: {task_id_str}] Failed to store successful result in Firestore: {e}")
+            # *** Update Firestore on Success ***
+            if firestore_available_this_request and research_result_response and task_doc_ref:
+                try:
+                    update_data = {
+                        "status": "COMPLETED",
+                        "report": research_result_response.report, # Store the final report
+                        "usageStatistics": research_result_response.usage_statistics.model_dump(mode='json') if research_result_response.usage_statistics else None, # Store usage stats
+                        "completedAt": firestore.SERVER_TIMESTAMP
+                    }
+                    task_doc_ref.update(update_data)
+                    logger.info(f"[WS Task ID: {task_id_str}] Updated Firestore with COMPLETED status, report, and usage stats.")
+                except Exception as e:
+                    logger.error(f"[WS Task ID: {task_id_str}] Failed to update Firestore with final results: {e}")
+                    # Consider how to handle this - maybe send an error message back?
+            elif not firestore_available_this_request:
+                logger.warning(f"[WS Task ID: {task_id_str}] Firestore not available, cannot save final results.")
 
         # --- Cancellation Handling --- #
         except asyncio.CancelledError:
             connection_active = False
-            logger.info(f"[WS Task ID: {task_id_str}] Orchestration task was cancelled.")
-            if firestore_available_this_request:
+            logger.warning(f"[WS Task ID: {task_id_str}] Orchestration task was cancelled (likely WebSocket closure).")
+            if firestore_available_this_request and task_doc_ref:
                 try:
                     doc_snapshot_cancel = task_doc_ref.get()
                     if doc_snapshot_cancel.exists and doc_snapshot_cancel.to_dict().get("status") not in ["CANCELLED", "COMPLETE", "ERROR"]:
@@ -295,7 +310,7 @@ async def websocket_research_route(
             # If we get here, it means the wrapper failed or didn't send.
             # Send a generic fallback error if possible.
             await callback_handler._send_update("ERROR", "ORCHESTRATION_ERROR", f"Orchestration failed unexpectedly. Error ID: {error_id}", {"error_type": type(e).__name__, "error_id": str(error_id)})
-            if firestore_available_this_request:
+            if firestore_available_this_request and task_doc_ref:
                 try:
                     task_doc_ref.update({"status": "ERROR", "error": error_msg, "completedAt": firestore.SERVER_TIMESTAMP})
                     logger.info(f"[WS Task ID: {task_id_str}] Stored orchestration error in Firestore.")
@@ -312,7 +327,7 @@ async def websocket_research_route(
             # Orchestrator (or wrapper) should send error via callback before raising/returning
             # Send a generic fallback error if possible.
             await callback_handler._send_update("ERROR", "CRITICAL_ERROR", f"Critical orchestration error occurred. Error ID: {error_id_unexp}", {"error_type": type(e).__name__, "error_id": str(error_id_unexp)})
-            if firestore_available_this_request:
+            if firestore_available_this_request and task_doc_ref:
                 try:
                     task_doc_ref.update({"status": "ERROR", "error": error_msg, "completedAt": firestore.SERVER_TIMESTAMP})
                     logger.info(f"[WS Task ID: {task_id_str}] Stored unexpected critical error in Firestore.")
@@ -325,10 +340,8 @@ async def websocket_research_route(
     except WebSocketDisconnect:
         connection_active = False
         logger.info(f"[WS Task ID: {task_id_str}] WebSocket disconnected by client.")
-        if orchestration_task and not orchestration_task.done():
-            orchestration_task.cancel()
-            logger.info(f"[WS Task ID: {task_id_str}] Sent cancellation signal to orchestration task due to client disconnect.")
-            # Firestore status update for cancellation will happen in the CancelledError handler above
+        logger.info(f"[WS Task ID: {task_id_str}] Orchestration task will continue running in the background.")
+        # Firestore status update for cancellation will happen in the CancelledError handler above IF explicitly stopped via API
 
     # --- General Exception Handling (WebSocket Handler Level) ---
     except Exception as e:
@@ -381,12 +394,17 @@ async def websocket_research_route(
 
 # --- Migrated GET Endpoint for Results ---
 @router.get("/result/{task_id}")
-async def get_research_result_route(task_id: str = Path(..., title="The ID of the research task to retrieve")):
+async def get_research_result_route(
+    task_id: str = Path(..., title="The ID of the research task to retrieve"),
+    db: Optional[Client] = Depends(get_firestore_db) # Inject Firestore DB
+):
     """Gets the status and result of a research task by its ID from Firestore."""
-    # Use the global db imported from main.py (temporary)
+    # Use the injected db dependency
     if not db:
-        logger.warning(f"Attempted to access /result/{task_id} but Firestore is not initialized.")
-        raise HTTPException(status_code=503, detail="Result storage is currently unavailable.")
+        # This case should now be handled by the dependency raising HTTPException 503
+        # If we reach here with db=None, it means the dependency allowed it (which it currently doesn't)
+        logger.error(f"Accessing /result/{task_id} but Firestore DB dependency returned None unexpectedly.")
+        raise HTTPException(status_code=503, detail="Result storage is unavailable (DB dependency failed).")
 
     try:
         # Collection name should match the one used in the WebSocket endpoint
@@ -406,7 +424,10 @@ async def get_research_result_route(task_id: str = Path(..., title="The ID of th
 
 # --- Migrated POST Endpoint to Stop/Cancel Task ---
 @router.post("/stop/{task_id}", status_code=200)
-async def stop_research_task_route(task_id: str = Path(..., title="The ID of the research task to request cancellation for")):
+async def stop_research_task_route(
+    task_id: str = Path(..., title="The ID of the research task to request cancellation for"),
+    db: Optional[Client] = Depends(get_firestore_db) # Inject Firestore DB
+):
     """
     Requests cancellation of a research task by updating its status in Firestore
     and attempting to cancel the background task.
@@ -414,10 +435,11 @@ async def stop_research_task_route(task_id: str = Path(..., title="The ID of the
     """
     logger.info(f"Received stop request for task ID: {task_id}")
 
-    # Use global db and active_tasks imported from core.state
+    # Use injected db dependency
     if not db:
-        logger.error(f"Stop request failed for task {task_id}: Firestore is not initialized.")
-        raise HTTPException(status_code=503, detail="Task persistence service is currently unavailable.")
+        # Handled by dependency
+        logger.error(f"Stop request failed for task {task_id}: Firestore DB dependency returned None.")
+        raise HTTPException(status_code=503, detail="Task persistence service is currently unavailable (DB dependency failed).")
 
     try:
         task_doc_ref = db.collection("research_tasks").document(task_id)

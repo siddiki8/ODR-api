@@ -7,6 +7,7 @@ import json
 import asyncio
 from typing import Dict, Any, Optional
 import os
+from contextlib import asynccontextmanager # Import asynccontextmanager
 
 # Import configuration
 from .core.config import AppSettings, ApiKeys
@@ -32,38 +33,54 @@ from .core import state
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Create FastAPI app instance
+# --- Firebase Initialization Function ---
+# def initialize_firebase(): # No longer needed here
+#     """Initializes the Firebase Admin SDK and sets the global db state."""
+#     try:
+#         firebase_cred_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY_JSON")
+#         if not firebase_cred_path:
+#             logger.warning("FIREBASE_SERVICE_ACCOUNT_KEY_JSON env var not set. Firestore integration disabled.")
+#             return # Exit initialization if path not set
+#
+#         if not os.path.exists(firebase_cred_path):
+#              logger.warning(f"Firebase credentials file not found at: {firebase_cred_path}. Firestore integration disabled.")
+#              return # Exit initialization if file not found
+#
+#         cred = credentials.Certificate(firebase_cred_path)
+#         firebase_admin.initialize_app(cred)
+#         state.db = firestore.client() # Initialize the db instance in core.state
+#         logger.info("Firebase Admin SDK initialized successfully via lifespan.")
+#     except ValueError as e:
+#          logger.error(f"Error initializing Firebase Admin SDK (likely invalid creds path/format): {e}", exc_info=False)
+#          # state.db remains None
+#     except Exception as e:
+#         logger.critical(f"CRITICAL ERROR: Failed to initialize Firebase Admin SDK during startup: {e}", exc_info=True)
+#         # state.db remains None
+
+
+# --- Lifespan Context Manager ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Actions to perform on startup
+    logger.info("Application startup: Initializing services...")
+    # initialize_firebase() # REMOVED: Initialization now handled by dependency
+    logger.info("Application startup: Service initialization complete.")
+    yield
+    # Actions to perform on shutdown (optional)
+    logger.info("Application shutdown.")
+
+
+# Create FastAPI app instance with lifespan manager
 app = FastAPI(
     title="Deep Research API",
     description="API service providing access to various research agencies.",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan # Add the lifespan manager here
 )
 
 # --- Global Task Tracking (Accessed by agency routers) ---
 # TODO: Move to app.core.state
 # active_tasks: Dict[str, asyncio.Task] = {} # Now defined in core.state
-
-# --- Initialize Firebase Admin SDK (Accessed by agency routers) ---
-# TODO: Move to app.core.state and initialize here
-# db = None # Now defined in core.state
-try:
-    firebase_cred_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY_JSON")
-    if not firebase_cred_path:
-        logger.warning("FIREBASE_SERVICE_ACCOUNT_KEY_JSON env var not set. Firestore integration disabled.")
-    else:
-        if not os.path.exists(firebase_cred_path):
-             logger.warning(f"Firebase credentials file not found at: {firebase_cred_path}. Firestore integration disabled.")
-        else:
-            cred = credentials.Certificate(firebase_cred_path)
-            firebase_admin.initialize_app(cred)
-            # db = firestore.client() # Get Firestore client
-            state.db = firestore.client() # Initialize the db instance in core.state
-            logger.info("Firebase Admin SDK initialized successfully.")
-except ValueError as e:
-     logger.error(f"Error initializing Firebase Admin SDK (likely invalid creds path/format): {e}", exc_info=False)
-except Exception as e:
-    logger.critical(f"CRITICAL ERROR: Failed to initialize Firebase Admin SDK: {e}", exc_info=True)
-    # db remains None, subsequent checks will handle this
 
 # --- Import Core Dependencies ---
 from .core.dependencies import get_settings, get_api_keys
@@ -170,15 +187,16 @@ app.include_router(
 # --- CORS Middleware --- #
 # TODO: Make origins configurable via settings
 allowed_origins = [
-    "http://https://odr-frontend.vercel.app",
+    "https://odr-frontend.vercel.app",
     # Add other allowed origins like localhost for development
     "http://localhost:3000", 
+    "http://127.0.0.1:3000",
     "http://localhost:5173"
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

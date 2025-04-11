@@ -15,8 +15,8 @@ class DeepResearchConfig(BaseSettings):
 
     # --- LLM Model IDs --- 
     # Loadable from env vars like DEEP_RESEARCH_PLANNER_MODEL_ID
-    planner_model_id: str = Field(default="openrouter/quasar-alpha")
-    summarizer_model_id: str = Field(default="openrouter/quasar-alpha")
+    planner_model_id: str = Field(default="openrouter/optimus-alpha")
+    summarizer_model_id: str = Field(default="openrouter/optimus-alpha")
     writer_model_id: str = Field(default="google/gemini-2.0-flash-001")
     refiner_model_id: str = Field(default="openrouter/quasar-alpha")
     

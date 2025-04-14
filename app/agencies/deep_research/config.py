@@ -15,7 +15,7 @@ class DeepResearchConfig(BaseSettings):
 
     # --- LLM Model IDs --- 
     # Loadable from env vars like DEEP_RESEARCH_PLANNER_MODEL_ID
-    planner_model_id: str = Field(default="google/gemini-2.0-flash-thinking-exp:free")
+    planner_model_id: str = Field(default="google/gemini-2.0-flash-001")
     summarizer_model_id: str = Field(default="google/gemini-2.0-flash-001")
     writer_model_id: str = Field(default="openai/gpt-4.1")
     refiner_model_id: str = Field(default="google/gemini-2.0-flash-001")

@@ -15,10 +15,10 @@ class DeepResearchConfig(BaseSettings):
 
     # --- LLM Model IDs --- 
     # Loadable from env vars like DEEP_RESEARCH_PLANNER_MODEL_ID
-    planner_model_id: str = Field(default="openrouter/optimus-alpha")
-    summarizer_model_id: str = Field(default="openrouter/optimus-alpha")
-    writer_model_id: str = Field(default="openrouter/optimus-alpha")
-    refiner_model_id: str = Field(default="openrouter/optimus-alpha")
+    planner_model_id: str = Field(default="google/gemini-2.0-flash-thinking-exp:free")
+    summarizer_model_id: str = Field(default="google/gemini-2.0-flash-001")
+    writer_model_id: str = Field(default="openai/gpt-4.1")
+    refiner_model_id: str = Field(default="google/gemini-2.0-flash-001")
     
     # --- Reranker --- 
     # Reranker model, loaded from env var DEEP_RESEARCH_RERANKER_MODEL, with default

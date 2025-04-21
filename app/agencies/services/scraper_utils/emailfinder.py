@@ -33,7 +33,7 @@ EMAIL_REGEX = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
 async def find_emails_deep(
     start_url: str,
     max_depth: int = 1, # Default to crawl start_url + 1 level deep
-    max_pages: Optional[int] = 50 # Limit total pages crawled
+    max_pages: Optional[int] = 20 # Limit total pages crawled
 ) -> Tuple[List[EmailPageResult], List[str]]:
     """
     Performs a deep crawl starting from `start_url` to find pages containing email addresses.

@@ -49,13 +49,13 @@ def create_planner_agent(config: CPEConfig) -> Agent[CPEPlannerOutput]:
     )
 
 
-class CPEAgents(BaseModel):
+class AgencyAgents(BaseModel):
     extractor: Any
     planner: Any
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
-def get_cpe_agents(config: CPEConfig) -> CPEAgents:
+def get_cpe_agents(config: CPEConfig) -> AgencyAgents:
     """Initializes and returns the agents for CPE."""
     extractor = create_extractor_agent(config=config)
     logger.info(f"Initialized extractor agent using model: {config.extractor_model_id}")
@@ -63,7 +63,7 @@ def get_cpe_agents(config: CPEConfig) -> CPEAgents:
     planner = create_planner_agent(config=config)
     logger.info(f"Initialized planner agent using model: {config.planner_model_id}")
 
-    return CPEAgents(
+    return AgencyAgents(
         extractor=extractor,
         planner=planner
     ) 

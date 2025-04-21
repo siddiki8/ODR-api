@@ -57,9 +57,9 @@ async def main():
 
     # Define test query and location
     request = CPERequest(
-        query="real estate agencies",
+        query="Private Equity firms.",
         location="St. Louis, Missouri",
-        max_search_tasks=10
+        max_search_tasks=5
     )
 
     # Execute CPE workflow, passing the serper_config

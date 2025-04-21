@@ -1,5 +1,4 @@
-l_tokens=954), 'extractor': TokenUsageCounter(prompt_tokens=5610739, completion_tokens=6157, total_tokens=5616896)} estimated_cost=None serper_queries_used=10 sources_processed_count=0 refinement_iterations_run=0
-CPE Run Completed.
+2025-04-20 21:16:01,769 - app.agencies.cpe.orchestrator - INFO - Final Usage: token_usage={'planner': TokenUsageCounter(prompt_tokens=431, completion_tokens=523, total_tokens=954), 'extractor': TokenUsageCounter(prompt_tokens=5610739, completion_tokens=6157, total_tokens=5616896)} estimated_cost=None serper_queries_used=10 sources_processed_count=0 refinement_iterations_run=0
 {
   "profiles": [
     {

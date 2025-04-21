@@ -25,6 +25,7 @@ from firebase_admin import credentials, firestore
 
 # --- Import Agency Routers ---
 from app.agencies.deep_research.routes import router as deep_research_router
+from app.agencies.cpe.routes import router as cpe_router # Import CPE router
 
 # --- Import Shared State ---
 from .core import state
@@ -181,18 +182,18 @@ app.include_router(
     prefix="/deep_research",
     tags=["Deep Research Agency"]
 )
+app.include_router(
+    cpe_router, 
+    prefix="/cpe",
+    tags=["Company Profile Extractor"]
+)
 # Add other agency routers here in the future
 # app.include_router(another_agency_router, prefix="/another_agency", tags=["Another Agency"])
 
 # --- CORS Middleware --- #
 # TODO: Make origins configurable via settings
 allowed_origins = [
-    "https://odr-frontend.vercel.app",
-    # Add other allowed origins like localhost for development
-    "https://odr.luminarysolutions.ai",
-    #"http://localhost:3000", 
-    #"http://127.0.0.1:3000",
-    #"http://localhost:5173"
+    "*" # Temporarily allow all origins for testing
 ]
 
 app.add_middleware(

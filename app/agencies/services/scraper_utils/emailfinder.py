@@ -52,6 +52,8 @@ async def find_emails_deep(
     all_crawled_urls: List[str] = []
     email_pattern = re.compile(EMAIL_REGEX)
     crawled_count = 0
+    # --- Add set to track seen emails across this crawl ---
+    seen_emails_overall: set[str] = set()
 
     logger.info(f"Starting deep email search on {start_url} (max_depth={max_depth}, max_pages={max_pages})")
 
@@ -90,16 +92,28 @@ async def find_emails_deep(
 
                 if result.success and result.html:
                     # Search for emails in the raw HTML content
-                    found_emails = email_pattern.findall(result.html)
+                    found_emails_on_page = set(email_pattern.findall(result.html))
 
-                    if found_emails:
-                        logger.info(f"Found {len(found_emails)} emails on: {result.url}")
-                        page_result: EmailPageResult = {
-                            "url": result.url,
-                            "html": result.html, # Store the full HTML
-                            "emails": list(set(found_emails)) # Store unique emails found
-                        }
-                        results.append(page_result)
+                    if found_emails_on_page:
+                        # --- Check for NEW emails not seen before in this crawl ---
+                        newly_found_emails = found_emails_on_page - seen_emails_overall
+
+                        if newly_found_emails:
+                            logger.info(f"Found {len(newly_found_emails)} new emails on: {result.url}")
+                            page_result: EmailPageResult = {
+                                "url": result.url,
+                                "html": result.html, # Include HTML because new emails were found
+                                "emails": list(newly_found_emails) # Store only the newly found unique emails
+                            }
+                            results.append(page_result)
+                            # Add the newly found emails to the overall set for this crawl
+                            seen_emails_overall.update(newly_found_emails)
+                        else:
+                            # Emails found, but all were duplicates seen on previous pages in this crawl
+                            logger.debug(f"Found only duplicate emails ({len(found_emails_on_page)}) on: {result.url}. Skipping HTML storage.")
+                            # Optional: Could still append a result with html=None if needed elsewhere
+                            # page_result: EmailPageResult = {"url": result.url, "html": None, "emails": list(found_emails_on_page)}
+                            # results.append(page_result)
                     else:
                          logger.debug(f"No emails found on: {result.url}")
 
@@ -117,7 +131,7 @@ async def find_emails_deep(
     except Exception as e:
         logger.error(f"An error occurred during the deep crawl from {start_url}: {e}", exc_info=True)
 
-    logger.info(f"Finished deep email search. Found emails on {len(results)} out of {crawled_count} crawled pages.")
+    logger.info(f"Finished deep email search. Found new emails on {len(results)} out of {crawled_count} crawled pages.")
     return results, all_crawled_urls
 
 # Example usage (for testing purposes)

@@ -3,7 +3,7 @@ from typing import Optional
 import logging
 from dataclasses import dataclass
 
-from pydantic import Field, HttpUrl, SecretStr
+from pydantic import Field, HttpUrl, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv, find_dotenv # Import find_dotenv
 
@@ -30,48 +30,34 @@ else:
     logger.debug(f"Direct os.getenv('OPENROUTER_API_KEY'): Not Found! (.env loaded: {loaded})")
 # --- END DEBUG ---
 
-# --- Moved SerperConfig here to break circular import ---
-@dataclass
-class SerperConfig:
-    """Configuration settings for the Serper Search API client."""
-    api_key: str
-    base_url: str = "https://google.serper.dev" # Base URL for the Serper API
-    default_location: str = 'us' # Default geographical location for searches
-    timeout: int = 15 # Default timeout in seconds for API requests
+# --- Refactored SerperConfig using pydantic-settings ---
+class SerperConfig(BaseSettings):
+    """Configuration settings for the Serper Search API client, loaded via pydantic-settings."""
+    # Load SERPER_API_KEY directly into a SecretStr
+    api_key: SecretStr = Field(..., alias='SERPER_API_KEY', description="API Key for Serper API")
+    # Load other settings with defaults if not set
+    base_url: HttpUrl = Field("https://google.serper.dev", alias='SERPER_BASE_URL', description="Base URL for the Serper API")
+    default_location: str = Field('us', alias='SERPER_DEFAULT_LOCATION', description="Default geographical location for searches")
+    timeout: int = Field(15, alias='SERPER_TIMEOUT', gt=0, description="Default timeout in seconds for API requests")
 
-    @classmethod
-    def from_env(cls) -> 'SerperConfig':
-        """
-        Creates a SerperConfig instance by loading settings from environment variables.
-        
-        Reads:
-            SERPER_API_KEY (required)
-            SERPER_BASE_URL (optional, default: https://google.serper.dev)
-            SERPER_TIMEOUT (optional, default: 15)
-            
-        Raises:
-            ConfigurationError: If SERPER_API_KEY is not set.
-        """
-        api_key = os.getenv("SERPER_API_KEY")
-        if not api_key:
-            # Assuming ConfigurationError is defined or imported elsewhere in core.config or globally
-            # If not, replace with ValueError or define/import ConfigurationError
-            from app.core.exceptions import ConfigurationError # Import locally if needed 
-            raise ConfigurationError("SERPER_API_KEY environment variable not set")
-        
-        base_url = os.getenv("SERPER_BASE_URL", "https://google.serper.dev")
-        
-        timeout_str = os.getenv("SERPER_TIMEOUT", "15")
-        try:
-            timeout = int(timeout_str)
-            if timeout <= 0:
-                raise ValueError("Timeout must be positive")
-        except ValueError:
-            logger.warning(f"Invalid SERPER_TIMEOUT value '{timeout_str}'. Using default 15.")
-            timeout = 15
+    model_config = SettingsConfigDict(
+        env_file='.env',             # Load from .env file if present
+        env_file_encoding='utf-8',
+        extra='ignore'               # Ignore extra env vars
+        # No env_prefix needed if vars are SERPER_API_KEY, SERPER_BASE_URL etc.
+    )
 
-        return cls(api_key=api_key, base_url=base_url, timeout=timeout)
-# --- End Moved SerperConfig ---
+    @model_validator(mode='after')
+    def check_api_key_present(cls, self):
+        if not self.api_key or not self.api_key.get_secret_value():
+            raise ValueError("SERPER_API_KEY must be set in the environment or .env file and must not be empty.")
+        return self
+
+    # Remove the old from_env classmethod
+    # @classmethod
+    # def from_env(cls) -> 'SerperConfig':
+    #     ...
+# --- End Refactored SerperConfig ---
 
 class ApiKeys(BaseSettings):
     """Loads sensitive API keys from environment variables."""

@@ -33,10 +33,11 @@ async def search_serper_batch_service(
         raise ConfigurationError("Serper configuration with API key was not provided.")
 
     headers = {
-        'X-API-KEY': config.api_key, # Use config object
+        # Unwrap the SecretStr to get the actual key string for the header
+        'X-API-KEY': config.api_key.get_secret_value(),
         'Content-Type': 'application/json'
     }
-    batch_request_url = f"{config.base_url.rstrip('/')}/search"
+    batch_request_url = f"{str(config.base_url).rstrip('/')}/search"
 
     batch_payload_list = []
     for task in search_tasks:

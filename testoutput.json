@@ -1,0 +1,223 @@
+{
+  "profiles": [
+    {
+      "domain": "https://builtin.com/",
+      "name": "Built In",
+      "description": "Built In is the online community for startups and tech companies, helping users find tech jobs, news, and events.",
+      "location": "US",
+      "contact_page": null,
+      "emails": [
+        "recruitment@clicktherapeutics.com"
+      ]
+    },
+    {
+      "domain": "https://flippa.com/",
+      "name": "Flippa",
+      "description": "Flippa is a marketplace for buying and selling online businesses, websites, apps, and domains.",
+      "location": null,
+      "contact_page": "https://flippa.com/blog/contact",
+      "emails": [
+        "blog@flippa.com"
+      ]
+    },
+    {
+      "domain": "https://www.cgep.com/",
+      "name": "Compass Group Equity Partners",
+      "description": "Compass Group Equity Partners is a private equity firm.",
+      "location": "St. Louis, Missouri",
+      "contact_page": "https://www.cgep.com/contact",
+      "emails": [
+        "info@cgep.com",
+        "recruiting@cgep.com"
+      ]
+    },
+    {
+      "domain": "https://bambooequity.com/",
+      "name": "Bamboo Equity Partners",
+      "description": "Bamboo Equity Partners acquire undervalued spaces where we can build value to provide clients with a growth-oriented investment solution.",
+      "location": "11701 Borman Dr, Suite 200\nSt Louis, MO 63146",
+      "contact_page": "https://bambooequity.com/contact-us",
+      "emails": [
+        "info@bambooequity.com"
+      ]
+    },
+    {
+      "domain": "https://www.pemarketplace.co/",
+      "name": "PEmarketplace",
+      "description": "PEmarketplace is a boutique marketplace for growth equity and private equity deals. Focused on deals with $1M to $100M in enterprise value. Built for business owners, investors, & M&A advisors to connect in a more systematic way, automate routine tasks, and get more deals done.",
+      "location": "38 Plymouth Rd, Needham, MA 02492-3715",
+      "contact_page": null,
+      "emails": [
+        "talent@pemarketplace.co",
+        "support@pemarketplace.co",
+        "hello@pemarketplace.co",
+        "press@pemarketplace.co"
+      ]
+    },
+    {
+      "domain": "https://www.privsource.com/",
+      "name": "PrivSource",
+      "description": "PrivSource is a private, vetted deal sourcing network for experienced lower and middle-market M&A professionals, helping them source buyout/capital raise opportunities and connect with transaction partners without success fees.",
+      "location": null,
+      "contact_page": "https://www.privsource.com/#contact",
+      "emails": []
+    },
+    {
+      "domain": "https://mergr.com/",
+      "name": "Mergr",
+      "description": "Mergr is an online database of Private Equity Firms, Public and Private Companies, their M&A Activity, and Advisors.",
+      "location": "Los Angeles, California",
+      "contact_page": "https://mergr.com/contact",
+      "emails": [
+        "sales@mergr.com",
+        "support@mergr.com",
+        "ACOF_IR@aresmgmt.com",
+        "NMC-GeneralInquiry@newmountaincapital.com",
+        "teachersprivatecapital@otpp.com"
+      ]
+    },
+    {
+      "domain": "https://clutch.co/",
+      "name": "Clutch.co",
+      "description": "Clutch.co helps businesses find and hire the best-fit service providers by publishing reviews, data, and insights.",
+      "location": "1800 Massachusetts Ave, NW Washington, DC 20036",
+      "contact_page": null,
+      "emails": [
+        "reviews@clutch.co"
+      ]
+    },
+    {
+      "domain": "https://www.obcapllc.com/",
+      "name": "O'Brien Capital, LLC",
+      "description": "O’Brien Capital works actively with business owners and advisory firms willing to pay a fee to source potential investment opportunities. We work hard to be responsive during the process and maintain the highest level of confidentiality with all information shared.",
+      "location": null,
+      "contact_page": "https://www.obcapllc.com/contact/",
+      "emails": [
+        "info@obcapllc.com"
+      ]
+    },
+    {
+      "domain": "https://www.sba.gov/",
+      "name": "U.S. Small Business Administration",
+      "description": "Contact an SBA-licensed Small Business Investment Company (SBIC) looking to invest in small businesses.",
+      "location": "Kansas City, MO; Saint Louis, MO",
+      "contact_page": "https://www.sba.gov/about-sba/organization/contact-sba",
+      "emails": [
+        "jwebb@c3cap.com",
+        "bmatthews@cultivationcapital.com",
+        "ricky@cultivationcapital.com",
+        "bgeis@eagleprivatecapital.com",
+        "bill.witzofsky@cfb.com",
+        "jacquie.ward@umb.com"
+      ]
+    },
+    {
+      "domain": "https://www.wilsquare.com/",
+      "name": "WILsquare Capital",
+      "description": "WILsquare Capital is a St. Louis-based private equity firm focused on acquiring and growing lower-middle market businesses in the Midwest and Southern U.S., with an emphasis on business services, niche manufacturing, distribution and technology companies.",
+      "location": "Three CityPlace Drive, Suite 1090, Saint Louis, MO 63141",
+      "contact_page": "https://www.wilsquare.com/contact",
+      "emails": [
+        "info@wilsquare.com",
+        "bwillhite@wilsquare.com",
+        "jwilmsen@wilsquare.com",
+        "jdeplanty@wilsquare.com",
+        "jrandazzo@wilsquare.com",
+        "ascharf@wilsquare.com",
+        "jcurry@wilsquare.com",
+        "hlewis@wilsquare.com",
+        "mpadgett@wilsquare.com",
+        "kchapman@wilsquare.com",
+        "gnoble@wilsquare.com",
+        "aanthony@wilsquare.com"
+      ]
+    },
+    {
+      "domain": "https://www.bwforsyth.com/",
+      "name": "BW Forsyth Partners",
+      "description": "BW Forsyth Partners is an investment firm focused on acquiring and building businesses through a people-centric approach, programmatic acquisitions, and operational strategy deployment.",
+      "location": "St. Louis",
+      "contact_page": "https://www.bwforsyth.com/#connect",
+      "emails": [
+        "joe.stevens@bwforsyth.com",
+        "jennifer.fishering@bwforsyth.com",
+        "cam.corona@bwforsyth.com",
+        "brian.holthouse@bwforsyth.com",
+        "drew.frailey@bwforsyth.com",
+        "ryan.thomas@bwforsyth.com",
+        "arthur.rybak@bwforsyth.com",
+        "paul.cichon@bwforsyth.com",
+        "brendan.hollander@bwforsyth.com",
+        "kyle.chapman@bwforsyth.com",
+        "chetwalker@carolina.rr.com",
+        "tom.samuel@bwforsyth.com"
+      ]
+    },
+    {
+      "domain": "https://www.tscp.com/",
+      "name": "Thompson Street Capital Partners",
+      "description": "Thompson Street Capital Partners is a private equity firm based in St. Louis focused on investing in founder-led middle market businesses.",
+      "location": "7676 Forsyth Bld., Suite 2700, St Louis, MO 63105",
+      "contact_page": null,
+      "emails": [
+        "cmcgrath@tscp.com",
+        "info@tscp.com",
+        "careers@tscp.com",
+        "rwagner@tscp.com"
+      ]
+    },
+    {
+      "domain": "https://elmtreefunds.com/",
+      "name": "ElmTree Funds",
+      "description": "A private equity real estate firm with an established track record in the commercial real estate net-lease sector, focusing on single tenant, mission critical built-to-suit industrial assets leased on a long-term basis to credit-worthy tenants across the United States.",
+      "location": "8027 Forsyth Blvd. St. Louis, MO 63105",
+      "contact_page": "https://elmtreefunds.com/contact/",
+      "emails": [
+        "info@elmtreefunds.com",
+        "IR@elmtreefunds.com"
+      ]
+    },
+    {
+      "domain": "https://blog.privateequitylist.com/",
+      "name": "PrivateEquityList",
+      "description": "PrivateEquityList is a simple and up-to-date platform for finding private equity, venture capital, and angel investors, especially in new markets.",
+      "location": "St. Louis",
+      "contact_page": "https://blog.privateequitylist.com/about/",
+      "emails": [
+        "privateequitylist@gmail.com",
+        "info@tscp.com",
+        "sIcRAEOKvwi683qU@sicraeokvwi683qu.com",
+        "info@cultivationcapital.com",
+        "9gYZSk3urKz4IyWt@9gyzsk3urkz4iywt.com"
+      ]
+    },
+    {
+      "domain": "https://lewisandclarkcapital.com/",
+      "name": "Lewis & Clark Capital",
+      "description": "Lewis & Clark Capital is a capital investment firm that guides leaders to opportunity in moments of change.",
+      "location": "120 S. Central Avenue, Suite 1000, St. Louis, MO 63105",
+      "contact_page": "https://lewisandclarkcapital.com/contact/",
+      "emails": [
+        "info@laccapital.com"
+      ]
+    }
+  ],
+  "usage_statistics": {
+    "token_usage": {
+      "planner": {
+        "prompt_tokens": 431,
+        "completion_tokens": 262,
+        "total_tokens": 693
+      },
+      "extractor": {
+        "prompt_tokens": 1977796,
+        "completion_tokens": 1624,
+        "total_tokens": 1979420
+      }
+    },
+    "estimated_cost": null,
+    "serper_queries_used": 5,
+    "sources_processed_count": 0,
+    "refinement_iterations_run": 0
+  }
+}

@@ -57,8 +57,8 @@ async def main():
 
     # Define test query and location
     request = CPERequest(
-        query="Private Equity firms.",
-        location="St. Louis, Missouri",
+        query="Thriven design and similar companies Jersey City developers",
+        location="Jersey City, New Jersey",
         max_search_tasks=5
     )
 

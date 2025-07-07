@@ -36,3 +36,6 @@ firebase-admin
 
 # Tokenization
 tiktoken
+
+# Finance
+yfinance

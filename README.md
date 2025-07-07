@@ -184,6 +184,8 @@ The API relies on environment variables for configuration, particularly API keys
 
 **Contributions are highly encouraged!** This framework is designed to grow. Help us build a diverse ecosystem of powerful research agencies.
 
+**For a detailed guide on creating a new agency from scratch, please see the [Agency Structure & Quickstart Guide](docs/AGENCY_STRUCTURE.md).**
+
 **How to Contribute:**
 
 1.  **Add a New Agency:**

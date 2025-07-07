@@ -24,7 +24,9 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 # --- Import Agency Routers ---
-from app.agencies.deep_research.routes import router as deep_research_router
+from app.agencies.deep_research import routes as deep_research_routes
+from app.agencies.cpe import routes as cpe_routes
+from app.agencies.financial_research import routes as financial_research_routes
 
 # --- Import Shared State ---
 from .core import state
@@ -169,18 +171,16 @@ async def generic_exception_handler(request: Request, exc: Exception):
     )
 
 # --- Root Endpoint --- #
-@app.get("/")
+@app.get("/", include_in_schema=False)
 async def root():
     _ = get_settings() # Depends() will resolve this using the imported function
     return {"message": "ODR Multi-Agency API is running."}
 
 # --- Include Agency Routers ---
 # Add routers from different agencies here
-app.include_router(
-    deep_research_router, 
-    prefix="/deep_research",
-    tags=["Deep Research Agency"]
-)
+app.include_router(deep_research_routes.router, prefix="/deep_research", tags=["Deep Research Agency"])
+app.include_router(cpe_routes.router, prefix="/cpe", tags=["Company Profile Extraction Agency"])
+app.include_router(financial_research_routes.router, prefix="/financial_research", tags=["Financial Research Agency"])
 # Add other agency routers here in the future
 # app.include_router(another_agency_router, prefix="/another_agency", tags=["Another Agency"])
 

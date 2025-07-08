@@ -11,13 +11,13 @@
 
 **Developed by [Luminary AI Solutions LLC](https://luminarysolutions.ai)**
 
-**The Open Deep Research API Framework provides a powerful, modular, multi-agency foundation for building sophisticated AI-powered research systems.** Instead of a single monolithic application, this framework allows you to create distinct `Agencies` (e.g., Deep Research, Financial Analysis, Code Review), each orchestrating multiple specialized Large Language Model (LLM) `Agents`. Agencies leverage shared core `tools` for LLMs to invoke (currently no tools are implemented) and `Services` to be invoked programatically. Currently implemented are web search, advanced content scraping, chunking, and ranking to generate comprehensive, cited reports, often streamed over WebSockets.
+**The Open Deep Research API Framework provides a powerful, modular, multi-agency foundation for building sophisticated AI-powered research systems.** Instead of a single monolithic application, this framework allows you to create distinct `Agencies` (e.g., Deep Research, Financial Analysis, Corporate Profile Extraction), each orchestrating multiple specialized Large Language Model (LLM) `Agents`. Agencies leverage shared core `tools` for LLMs to invoke (currently no tools are implemented) and `Services` to be invoked programatically. Currently implemented are web search, advanced content scraping, chunking, and ranking to generate comprehensive, cited reports, often streamed over WebSockets.
 
 **Build Your Own Research AI!** This framework is designed for extension. Easily add new agencies, agents, or services to tackle diverse research domains.
 
 ## ✨ Features
 
-*   **Highly Modular Design:** Built for extension! Easily add new specialized research `Agencies` (e.g., for finance, legal) in `app/agencies/` or enhance existing ones with new `Agents`.
+*   **Highly Modular Design:** Built for extension! Easily add new specialized research `Agencies` (e.g., for finance, legal, corporate profiling) in `app/agencies/` or enhance existing ones with new `Agents`.
 *   **Multi-Agency Architecture:** Organizes research tasks using specialized `Agencies`. Each agency runs independently with its own set of agents and orchestration logic.
 *   **Shareable Core Tools and Services:** Common tasks like web search (`app/services/search`), content scraping (`app/services/scraper`), text chunking (`app/services/chunking`), PDF handling (`app/services/scraping_utils`), and ranking (`app/agencies/services/ranking.py`) are isolated in `app/services/` or `app/agencies/services/`, ready to be reused by any agency. an LLM tool directory is also implemented but currently no tools are implemented.
 *   **Agency-Specific Orchestration:** Each agency defines its own workflow logic in its `orchestrator.py` file, allowing for diverse and complex research processes tailored to the domain.

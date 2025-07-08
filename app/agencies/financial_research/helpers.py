@@ -2,10 +2,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from .schemas import FinancialResearchConfig
-from app.services.finance_services.yfinance_service import YFinanceService, StockInfo, Financials
-from app.services.finance_services.social_media_service import MockSocialMediaService, SocialMediaPost
-from app.services.finance_services.news_service import MockNewsService, NewsArticle
-from app.services.finance_services.earnings_call_service import MockEarningsCallService, EarningsCallTranscript
+from app.agencies.services.finance_services.yfinance_service import YFinanceService, StockInfo, Financials
+from app.agencies.services.finance_services.social_media_service import MockSocialMediaService, SocialMediaPost
+from app.agencies.services.finance_services.news_service import MockNewsService, NewsArticle
+from app.agencies.services.finance_services.earnings_call_service import MockEarningsCallService, EarningsCallTranscript
 
 logger = logging.getLogger(__name__)
 

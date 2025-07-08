@@ -7,10 +7,10 @@ from . import schemas
 from .callbacks import FinancialsWebSocketUpdateHandler
 
 # Import services
-from app.services.finance_services.yfinance_service import YFinanceService
-from app.services.finance_services.social_media_service import MockSocialMediaService
-from app.services.finance_services.news_service import MockNewsService
-from app.services.finance_services.earnings_call_service import MockEarningsCallService
+from app.agencies.services.finance_services.yfinance_service import YFinanceService
+from app.agencies.services.finance_services.social_media_service import MockSocialMediaService
+from app.agencies.services.finance_services.news_service import MockNewsService
+from app.agencies.services.finance_services.earnings_call_service import MockEarningsCallService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

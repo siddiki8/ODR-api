@@ -41,9 +41,13 @@ async def run_financial_analysis_orchestration(
     
     # Create tasks only if data is available
     if financials:
+        # First, programmatically calculate key metrics
+        key_metrics = helpers.calculate_key_metrics(financials)
+
         analysis_tasks.append(agents_collection.financials_agent.run(
             agents.FINANCIALS_AGENT_USER_TEMPLATE.format(
                 ticker=ticker,
+                key_metrics=agents.format_data_for_prompt(key_metrics),
                 income_statement=agents.format_data_for_prompt(financials.income_statement),
                 balance_sheet=agents.format_data_for_prompt(financials.balance_sheet),
                 cash_flow=agents.format_data_for_prompt(financials.cash_flow)

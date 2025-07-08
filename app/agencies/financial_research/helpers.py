@@ -73,3 +73,53 @@ async def fetch_all_data_sources(
         "earnings_call_transcript": earnings_call,
     }
 
+def calculate_key_metrics(financials: Financials) -> dict:
+    """
+    Calculates key financial metrics from the financial statements.
+    This function processes the raw data to ensure calculations are done programmatically for accuracy.
+    
+    Args:
+        financials: A Financials object containing income statement, balance sheet, and cash flow data.
+
+    Returns:
+        A dictionary of calculated key metrics.
+    """
+    metrics = {}
+    
+    try:
+        # yfinance data is structured with dates as keys. We get the most recent data column.
+        balance_sheet = next(iter(financials.balance_sheet.values()))
+        income_statement = next(iter(financials.income_statement.values()))
+        
+        # --- Safely extract values using .get() to avoid KeyErrors ---
+        total_liabilities = balance_sheet.get("Total Liab")
+        total_stockholder_equity = balance_sheet.get("Total Stockholder Equity")
+        total_current_assets = balance_sheet.get("Total Current Assets")
+        total_current_liabilities = balance_sheet.get("Total Current Liabilities")
+        net_income = income_statement.get("Net Income")
+        total_revenue = income_statement.get("Total Revenue")
+
+        # --- Calculate metrics if data is available and denominators are not zero ---
+        if total_liabilities is not None and total_stockholder_equity and total_stockholder_equity != 0:
+            metrics["Debt-to-Equity Ratio"] = f"{total_liabilities / total_stockholder_equity:.2f}"
+
+        if total_current_assets is not None and total_current_liabilities and total_current_liabilities != 0:
+            metrics["Current Ratio"] = f"{total_current_assets / total_current_liabilities:.2f}"
+
+        if net_income is not None and total_stockholder_equity and total_stockholder_equity != 0:
+            metrics["Return on Equity (ROE)"] = f"{net_income / total_stockholder_equity:.2%}"
+
+        if net_income is not None and total_revenue and total_revenue != 0:
+            metrics["Net Profit Margin"] = f"{net_income / total_revenue:.2%}"
+
+        logger.info(f"Successfully calculated key metrics for symbol: {list(metrics.keys())}")
+        
+    except (StopIteration, TypeError, AttributeError) as e:
+        logger.error(f"Could not calculate metrics due to a data structure issue: {e}")
+        return {"error": "Could not process financial statements for metric calculation."}
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during metric calculation: {e}", exc_info=True)
+        return {"error": "An unexpected error occurred during metric calculation."}
+
+    return metrics
+

@@ -8,19 +8,24 @@ from app.core.dependencies import LLMProvider
 # --- Prompt Templates ---
 
 FINANCIALS_AGENT_SYSTEM_PROMPT = """
-You are a senior financial analyst. Your task is to analyze the provided financial statements (income statement, balance sheet, cash flow) for a company.
-Provide a concise summary for each statement and an overall conclusion about the company's financial health. Extract key performance metrics.
+You are a senior financial analyst. Your task is to interpret provided financial data for a company.
+You will receive pre-calculated key metrics and summaries of the financial statements.
+Your goal is to provide a concise summary for each statement and an overall conclusion about the company's financial health based on all the information provided.
+Do not perform calculations. Your role is analysis and interpretation.
 """
 FINANCIALS_AGENT_USER_TEMPLATE = """
 Please analyze the following financial data for {ticker}.
 
-Income Statement:
+Key Metrics:
+{key_metrics}
+
+Income Statement Summary:
 {income_statement}
 
-Balance Sheet:
+Balance Sheet Summary:
 {balance_sheet}
 
-Cash Flow:
+Cash Flow Summary:
 {cash_flow}
 """
 

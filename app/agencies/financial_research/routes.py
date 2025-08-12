@@ -1,7 +1,7 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import logging
 from app.core.dependencies import get_llm_provider
-from .orchestrator import run_financial_analysis_orchestration
+from .orchestrator import run_financial_analysis_orchestration_wrapper
 from .agents import AgencyAgents
 from . import schemas
 from .callbacks import FinancialsWebSocketUpdateHandler
@@ -41,25 +41,24 @@ async def analysis_websocket(websocket: WebSocket):
         
         agents_collection = AgencyAgents(llm_provider=llm_provider, config=agency_config)
         
-        # Attach config to agents_collection for easy access in helpers
-        agents_collection.config = agency_config
-
         # Setup callback handler
         async def send_update(payload: dict):
             await websocket.send_json(payload)
         
         update_handler = FinancialsWebSocketUpdateHandler(send_update)
 
-        # Run the orchestration
-        response = await run_financial_analysis_orchestration(
+        # Run the orchestration via the robust wrapper
+        response = await run_financial_analysis_orchestration_wrapper(
             request=request,
             agents_collection=agents_collection,
+            config=agency_config,
             services=services,
-            update_callback=update_handler 
+            update_callback=update_handler
         )
 
-        # Send the final report via the handler
-        await update_handler.send_final_report(response.final_report)
+        # Send the final report via the handler (if not an error response)
+        if "Error" not in response.final_report.title:
+            await update_handler.send_final_report(response.final_report)
 
     except WebSocketDisconnect:
         logger.info("Client disconnected from financial analysis websocket.")

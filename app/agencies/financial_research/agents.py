@@ -1,6 +1,6 @@
 from __future__ import annotations
 import json
-from pydantic_ai import pydantic_ai_processor
+from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.llm import LLM
 from . import schemas
 from app.core.dependencies import LLMProvider
@@ -86,30 +86,45 @@ Earnings Call Analysis:
 
 # --- Agent Definitions ---
 
-@pydantic_ai_processor
-def create_financials_agent(llm: LLM) -> schemas.FundamentalAnalysis:
-    """An agent that analyzes financial statements."""
-    pass
+def create_financials_agent(llm: LLM) -> Agent:
+    return Agent(
+        llm=llm,
+        system_prompt=FINANCIALS_AGENT_SYSTEM_PROMPT,
+        result_type=schemas.FundamentalAnalysis,
+        retry=ModelRetry(tries=3, on_fail="log")
+    )
 
-@pydantic_ai_processor
-def create_sentiment_agent(llm: LLM) -> schemas.SentimentAnalysis:
-    """An agent that analyzes social media sentiment."""
-    pass
+def create_sentiment_agent(llm: LLM) -> Agent:
+    return Agent(
+        llm=llm,
+        system_prompt=SENTIMENT_AGENT_SYSTEM_PROMPT,
+        result_type=schemas.SentimentAnalysis,
+        retry=ModelRetry(tries=3, on_fail="log")
+    )
 
-@pydantic_ai_processor
-def create_news_agent(llm: LLM) -> schemas.NewsAnalysis:
-    """An agent that analyzes news articles."""
-    pass
+def create_news_agent(llm: LLM) -> Agent:
+    return Agent(
+        llm=llm,
+        system_prompt=NEWS_AGENT_SYSTEM_PROMPT,
+        result_type=schemas.NewsAnalysis,
+        retry=ModelRetry(tries=3, on_fail="log")
+    )
 
-@pydantic_ai_processor
-def create_earnings_agent(llm: LLM) -> schemas.EarningsCallAnalysis:
-    """An agent that analyzes earnings call transcripts."""
-    pass
+def create_earnings_agent(llm: LLM) -> Agent:
+    return Agent(
+        llm=llm,
+        system_prompt=EARNINGS_CALL_AGENT_SYSTEM_PROMPT,
+        result_type=schemas.EarningsCallAnalysis,
+        retry=ModelRetry(tries=3, on_fail="log")
+    )
 
-@pydantic_ai_processor
-def create_report_generator_agent(llm: LLM) -> schemas.FinancialReport:
-    """An agent that generates a final report from multiple analyses."""
-    pass
+def create_report_generator_agent(llm: LLM) -> Agent:
+    return Agent(
+        llm=llm,
+        system_prompt=REPORT_GENERATOR_SYSTEM_PROMPT,
+        result_type=schemas.FinancialReport,
+        retry=ModelRetry(tries=3, on_fail="log")
+    )
 
 
 # --- Agent Collection ---

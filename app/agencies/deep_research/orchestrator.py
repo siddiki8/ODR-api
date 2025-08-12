@@ -2,14 +2,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import List, Dict, Any, Optional
-import os
-import json
-import re
-import tiktoken # Add tiktoken import
-
-# Pydantic AI imports
-# from pydantic_ai.usage import Usage # No longer needed directly here
-from pydantic import ValidationError
+import tiktoken
 
 # Import agency components
 from . import agents
@@ -34,7 +27,7 @@ from ..services.search import SearchResult, SerperConfig # Removed SearchTask im
 from ..services.scraper import ExtractionResult
 from app.core.config import AppSettings
 # Import the new RunUsage tracker
-from app.core.schemas import RunUsage, UsageStatistics, TokenUsageCounter, SearchTask
+from app.core.schemas import RunUsage, UsageStatistics, SearchTask
 
 # --- Add Firestore DocumentReference type --- #
 from google.cloud.firestore_v1.document import DocumentReference

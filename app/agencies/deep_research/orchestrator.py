@@ -30,7 +30,9 @@ from .helpers import (
 # --- Import Callback Handler ---
 from .callbacks import WebSocketUpdateHandler
 
-from ..services.search import SearchResult, SerperConfig # Removed SearchTask import, using schemas.SearchTask
+from ..services.search import SearchResult # Removed SearchTask import, using schemas.SearchTask
+from app.core.config import SerperConfig
+from app.core.exceptions import ConfigurationError
 from ..services.scraper import ExtractionResult
 from app.core.config import AppSettings
 # Import the new RunUsage tracker
@@ -203,7 +205,7 @@ async def run_deep_research_orchestration(
              logger.warning("Initial search and reranking yielded no results.")
 
     # Catch config errors separately as they prevent continuation
-    except schemas.ConfigurationError as e: # Assuming ConfigurationError is in schemas or core
+    except ConfigurationError as e:
          logger.error(f"Search configuration error: {e}", exc_info=True)
          if update_callback:
              # Use a generic search error or a specific config error?
@@ -775,7 +777,7 @@ async def run_deep_research_orchestration(
             else:
                  reranked_refinement_search_results = []
 
-        except schemas.ConfigurationError as e: # Assuming ConfigurationError is available
+        except ConfigurationError as e:
              logger.error(f"Search config error during refinement: {e}", exc_info=True)
              if update_callback:
                  await update_callback.refinement_search_error(refinement_loop_count, e)

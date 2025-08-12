@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 # Firestore client instance (initialized via lifespan or dependency)
 db: Optional[Client] = None # Use Client type hint
 
-# Dictionary to track active background tasks (e.g., research orchestrations)
+# Global dictionary to track active background tasks (e.g., WebSocket orchestrations)
+# Key: task_id (str), Value: asyncio.Task
 active_tasks: Dict[str, asyncio.Task] = {}
 
 # --- Firebase Initialization Function --- #

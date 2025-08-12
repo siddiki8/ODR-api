@@ -43,14 +43,8 @@ def get_firestore_db() -> Optional[Client]:
     """
     Dependency function to get the Firestore client instance.
     Initializes Firebase if necessary.
-    Raises HTTPException if initialization fails and Firestore is required.
+    Returns None if initialization fails, allowing optional usage.
     """
     firestore_client = initialize_firebase_sync()
-    if firestore_client is None:
-        # Decide if this should be a hard error or allow optional usage
-        # For now, let's raise an error if the DB is needed but unavailable
-        raise HTTPException(
-            status_code=503,
-            detail="Firestore service is unavailable. Initialization failed."
-        )
+    # No longer raises HTTPException. Routes/Orchestrators must handle None.
     return firestore_client 
